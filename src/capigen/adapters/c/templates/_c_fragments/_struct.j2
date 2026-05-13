@@ -1,0 +1,9 @@
+{% from "_c_fragments/_format.j2" import format_c_type %}
+
+{%- macro render_struct(s) -%}
+typedef struct {
+{% for f in s.fields %}
+  {{ format_c_type(f.base, f.pointer, f.const) }} {{ f.name }}{% if f.array_size %}[{{ f.array_size }}]{% endif %};
+{% endfor %}
+}{{ "*" if s.pointer_alias else "" }} {{ s.template_alias }};
+{%- endmacro %}
