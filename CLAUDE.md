@@ -1,5 +1,14 @@
 # API Conventions
 
+> Orientation: capigen is an engine-agnostic generator. This document mixes two
+> concerns that are being separated. The **Spec-language reference** section is
+> capigen's own contract (schema features: descriptions, prefix, handle styles,
+> qualified aliases) and belongs here. The rest, below, is spec-authoring guidance
+> for capigen's first consumer, DuckDB (the err-slot model, module-conversion
+> mapping, the lexical rubric); that guidance is authoritative in the consuming
+> repository, not here, and references to `api_spec/` point at the consumer's spec,
+> which does not live in this repo. A full split is a pending cleanup.
+
 This document is the authoritative guide for DuckDB C API v2 spec definitions
 (`api_spec/v2/*/*.yaml`).
 
