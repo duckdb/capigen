@@ -126,13 +126,14 @@ It enforces a strict boundary between spec concepts and C output: `render.py` de
 
 ```bash
 uv sync --group dev
-uv run --group dev pytest        # run the test suite
-uvx ruff check .                 # lint
-uvx ruff format --check .        # format check
-uvx ty check src/capigen         # type check
-uv build                         # build the wheel and sdist
+uv run pre-commit install               # enable the hooks
+uv run --group dev pytest               # run the test suite
+uv build                                # build the wheel and sdist
 ```
 
-CI runs the test suite (Python 3.12-3.14), ruff, ty, and a build smoke check on every
+Linting, formatting, and type checks run through pre-commit (ruff, ruff-format, ty). Run
+them all at once with `uv run pre-commit run --all-files`.
+
+CI runs pre-commit, the test suite (Python 3.12-3.14), and a build smoke check on every
 push and pull request. Tagging `vX.Y.Z` publishes that version to PyPI via trusted
 publishing (see [RELEASING.md](RELEASING.md)).

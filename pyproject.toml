@@ -32,6 +32,7 @@ capigen = "capigen.__main__:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pre-commit>=4.0",
 ]
 
 [build-system]
