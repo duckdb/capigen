@@ -4,6 +4,33 @@ Reference for the spec files capigen reads: one `metadata.yaml` and any number o
 module YAML files. It matches `src/capigen/schema/metadata.schema.json` and
 `module.schema.json`.
 
+## Editor autocomplete
+
+For inline validation and completion, point your editor at the schema. Editors that use
+`yaml-language-server` (including the Red Hat YAML extension for VS Code) read a `$schema`
+modeline in a comment at the top of the file. Pin the tag to the schema version your spec
+targets.
+
+```yaml
+# metadata.yaml
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.4.0/src/capigen/schema/metadata.schema.json
+```
+
+```yaml
+# a module file
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.4.0/src/capigen/schema/module.schema.json
+```
+
+Every schema change is at least a minor bump, so all patch tags in a `MAJOR.MINOR` line
+carry the same schema. Pin to the first tag of the line: `v0.4.0` for schema `0.4`.
+
+`raw.githubusercontent.com` serves the same files if you would rather not depend on
+jsDelivr. Keep the path, change the host:
+
+```
+https://raw.githubusercontent.com/duckdb/capigen/v0.4.0/src/capigen/schema/module.schema.json
+```
+
 ## Two conventions first
 
 These two fields repeat across most constructs. They are documented here once and left

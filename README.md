@@ -6,7 +6,7 @@ capigen generates DuckDB's C API and extension headers. The API spec lives in th
 
 There are three distinct things in play:
 
-- **The IDL schema** (`src/capigen/schema/`) JSON Schema files defining a valid API spec. It defines constructs (types, functions, enums, ...), their fields, and their allowed values. See [schema_reference.md](schema_reference.md) for the complete reference.
+- **The IDL schema** (`src/capigen/schema/`) JSON Schema files defining a valid API spec. It defines constructs (types, functions, enums, ...), their fields, and their allowed values. See [schema_reference.md](schema_reference.md) for the complete reference, including how spec authors wire it into their editor for inline validation ([Editor autocomplete](schema_reference.md#editor-autocomplete)).
 - **capigen** (`src/capigen/`) validates a spec against the schema and can dispatch to a pluggable adapter for code generation.
 - **Adapters** (`src/capigen/adapters/`) are pluggable code generators. capigen ships the `c` adapter (produces the C header), the `bridge` adapter (produces C++ stub skeletons for unimplemented functions), and the `extension_header` adapter (produces a versioned function-pointer-struct extension header). Additional adapters can be supplied as external Python modules.
 
