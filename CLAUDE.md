@@ -17,6 +17,18 @@ uv build                                       # wheel + sdist
 uv run capigen c --spec-dir <dir> -o out.h     # run the C adapter
 ```
 
+## Pre-commit
+
+Use pre-commit to run the checks (ruff, ruff-format, ty) on each commit. Install the hooks
+once per clone:
+
+```bash
+uv run pre-commit install
+```
+
+A repo that consumes capigen should run the generator from a pre-commit hook too, so its
+committed output stays in sync with the spec.
+
 ## Repo map
 
 ```
@@ -166,8 +178,6 @@ Use this for a name owned elsewhere (another header or an external library). Not
 - The key is a C identifier, so it must match `^[A-Za-z_][A-Za-z0-9_]*$`.
 
 ## Comment and doc style
-
-These mirror the conventions of the DuckDB fork that consumes capigen.
 
 - Keep comments short. One short line as a rule. More than one line only in exceptional
   cases.
