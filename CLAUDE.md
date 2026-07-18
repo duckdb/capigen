@@ -165,9 +165,21 @@ Use this for a name owned elsewhere (another header or an external library). Not
 - It is registered under its verbatim name. Other modules reference it by that name.
 - The key is a C identifier, so it must match `^[A-Za-z_][A-Za-z0-9_]*$`.
 
-## Conventions
+## Comment and doc style
+
+These mirror the conventions of the DuckDB fork that consumes capigen.
+
+- Keep comments short. One short line as a rule. More than one line only in exceptional
+  cases.
+- Let the code carry the meaning. Too many large comments make code harder to read.
+- Do not write a comment about how a change was made or which issue it fixes. For example,
+  not "add +1 to fix an off-by-one". That goes in the commit message or the PR, not the
+  code.
+- Prose docs: short sentences, no em-dashes, DRY. Factor shared text out rather than
+  repeat it.
+
+## Other conventions
 
 - Python: keep `ruff` and `ty` clean.
-- Docs and comments: short sentences, no em-dashes, DRY.
 - The schema, capigen, and the adapters are versioned together. A consumer's spec is
   separate.
