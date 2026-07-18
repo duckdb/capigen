@@ -35,12 +35,13 @@ features.
 
 ## Release checklist
 
-1. Update `version` in `pyproject.toml`.
-2. If the schema version changed, update the `$id` in `src/capigen/schema/*.json` and
-   any schema-version references in the docs.
-3. `uv run --group dev pytest`, `uvx ruff check .`, `uvx ty check src/capigen`, `uv build`.
-4. Commit, then tag `vX.Y.Z` and push the tag. The `release` workflow builds and
-   publishes to PyPI via trusted publishing (OIDC; no token).
+1. Update `version` in `pyproject.toml`. `SCHEMA_VERSION` follows automatically.
+2. If the schema version changed, update the pinned schema-version tag in the docs (the
+   editor-autocomplete URLs in `schema_reference.md`, which point at the first tag of the
+   line).
+3. `uv run pre-commit run --all-files`, `uv run --group dev pytest`, and `uv build`.
+4. Commit, then tag `vX.Y.Z` and push the tag. The `release` workflow runs the tests,
+   builds, and publishes to PyPI via trusted publishing (OIDC; no token).
 5. Bump the pin in consumer repositories and regenerate their committed output.
 
 ## PyPI trusted publishing

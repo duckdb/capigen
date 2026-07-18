@@ -5,7 +5,16 @@ on:
     tags: ["v*"]
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group dev
+      - run: uv run --group dev pytest
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
