@@ -4,6 +4,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from .comments import doc, prefixed
 from .resolve import resolve_c_options, resolve_modules
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -12,11 +13,10 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 def generate(modules: list[dict], metadata: dict, output_path: Path) -> None:
     render_modules = resolve_modules(modules, metadata)
     c_opts = resolve_c_options(metadata)
+    width = int(c_opts["comment_width"])
 
-    def _c_line_comment(description: str) -> str:
-        """Emit a description as //! lines, one per non-empty line of input."""
-        lines = description.strip().splitlines()
-        return "\n//! ".join(line.strip() for line in lines if line.strip())
+    def _c_doc(description: str, indent: str = "") -> str:
+        return doc(description, indent, width)
 
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
@@ -25,7 +25,8 @@ def generate(modules: list[dict], metadata: dict, output_path: Path) -> None:
         lstrip_blocks=True,
         undefined=StrictUndefined,
     )
-    env.filters["c_line_comment"] = _c_line_comment
+    env.filters["c_doc"] = _c_doc
+    env.filters["c_lines"] = prefixed
     template = env.get_template("header.h.j2")
     output = template.render(
         modules=render_modules,

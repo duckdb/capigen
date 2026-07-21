@@ -81,25 +81,58 @@ from the consumer's `metadata.yaml`.
 ### Descriptions
 
 `description` is accepted on most constructs (see `schema_reference.md` for the exact
-list). The C adapter renders it as `//!` lines just above the generated `typedef`. A
-multi-line description (a YAML block scalar with `|`) becomes one `//!` line per
-non-empty input line, with leading and trailing whitespace stripped. An empty or
+list). The C adapter renders it just above the construct it documents. An empty or
 whitespace-only description emits nothing.
+
+A description is prose, so its line breaks are the spec's, not the header's. A
+multi-line description (a YAML block scalar with `|`) is collapsed to one line per
+paragraph. A blank line separates paragraphs, and a list item (`- `, `* `, `1. `) keeps
+its own line until the text dedents out of it.
+
+A description that fits on one line renders as `//!`. Anything longer renders as a
+`/*! ... */` block, so a comment spanning several lines reads as one comment:
 
 ```yaml
 handles:
   connection:
     description: A connection to a database.
+  cursor:
+    description: |
+      A cursor over a result.
+
+      Destroy it before the connection.
 ```
 
 ```c
 //! A connection to a database.
-typedef void *lib_connection_handle;
+typedef void *lib_connection_ptr;
+
+/*!
+ * A cursor over a result.
+ *
+ * Destroy it before the connection.
+ */
+typedef void *lib_cursor_ptr;
 ```
 
-The filter that emits these lines is `_c_line_comment` in
-`src/capigen/adapters/c/__init__.py`. It is consumed by `_c_fragments/_type.j2` and
-`_c_fragments/_struct.j2`.
+Line length is not the generator's business beyond choosing between those two forms.
+It emits one long line per paragraph, and every line carries its comment prefix, which
+is what lets a C formatter (`clang-format` and friends) reflow the comment to the
+consumer's column limit. Emitting a bare continuation line instead would strand it
+outside the comment, where no formatter can recover it.
+
+`options.c.comment_width` (default 120) is the column budget the form is chosen against.
+Set it to the consumer's formatter limit.
+
+The same rules apply to every documented construct: a typedef, an enum and its members,
+a constant, an error code, a struct and its fields, a callback, a function. A documented
+entry is preceded by a blank line, so a comment always reads as belonging to what
+follows it, never to what precedes it. The exception is the first entry inside a `{}`
+body, which follows its opener directly.
+
+`src/capigen/adapters/c/comments.py` holds this logic and is exposed to the templates as
+the `c_doc` filter (a description, indent-aware) and the `c_lines` filter (raw prefixed
+lines, for the pieces of a function's `/*! ... */` block).
 
 ### Prefix application
 

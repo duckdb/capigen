@@ -1,5 +1,6 @@
 """Resolve API spec dicts into C-specific render objects for Jinja2 templates."""
 
+from .comments import DEFAULT_WIDTH
 from .render import (
     CConstant,
     CEnum,
@@ -38,12 +39,14 @@ def _default_banner(prefix: str) -> str:
     )
 
 
-def resolve_c_options(metadata: dict) -> dict[str, str]:
-    """Resolve C-adapter macro names and banner, defaulting from the prefix."""
+def resolve_c_options(metadata: dict) -> dict[str, str | int]:
+    """Resolve C-adapter macro names, banner, and the comment column budget."""
     prefix = metadata.get("prefix", "")
     uprefix = prefix.upper()
     c = metadata.get("options", {}).get("c", {})
     return {
+        # Only decides `//!` line vs `/*! ... */` block; wrapping is the formatter's.
+        "comment_width": c.get("comment_width", DEFAULT_WIDTH),
         "api_macro": c.get("api_macro", f"{uprefix}C_API"),
         "extension_api_macro": c.get("extension_api_macro", f"{uprefix}EXTENSION_API"),
         "deprecated_macro": c.get("deprecated_macro", f"{uprefix}DEPRECATED"),

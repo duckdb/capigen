@@ -1,16 +1,24 @@
 {% from "_c_fragments/_format.j2" import format_c_type %}
 
-{%- macro render_field(f, indent) -%}
-{% if f.description %}{{ indent }}//! {{ f.description | c_line_comment }}
+{%- macro render_field(f, indent, first=true) -%}
+{% if f.description %}
+{% if not first %}
+
+{% endif %}
+{{ f.description | c_doc(indent) }}
 {% endif -%}
 {% if f.union_members is not none -%}
 {{ indent }}union {
 {% for m in f.union_members -%}
-{% if m.description %}{{ indent }}  //! {{ m.description | c_line_comment }}
+{% if m.description %}
+{% if not loop.first %}
+
+{% endif %}
+{{ m.description | c_doc(indent ~ "  ") }}
 {% endif -%}
 {{ indent }}  struct {
 {% for mf in m.fields -%}
-{{ render_field(mf, indent ~ "    ") }}
+{{ render_field(mf, indent ~ "    ", loop.first) }}
 {% endfor -%}
 {{ indent }}  } {{ m.name }};
 {% endfor -%}
@@ -18,7 +26,7 @@
 {%- elif f.nested_fields is not none -%}
 {{ indent }}struct {
 {% for nf in f.nested_fields -%}
-{{ render_field(nf, indent ~ "  ") }}
+{{ render_field(nf, indent ~ "  ", loop.first) }}
 {% endfor -%}
 {{ indent }}} {{ f.name }};
 {%- else -%}
@@ -27,7 +35,7 @@
 {%- endmacro -%}
 
 {%- macro render_struct_fwd(s) -%}
-  {%- if s.description %}//! {{ s.description | c_line_comment }}
+  {%- if s.description %}{{ s.description | c_doc }}
 {% endif -%}
 typedef struct {{ s.template_alias }} {{ "*" if s.pointer_alias else "" }}{{ s.template_alias }};
 {%- endmacro %}
@@ -35,7 +43,7 @@ typedef struct {{ s.template_alias }} {{ "*" if s.pointer_alias else "" }}{{ s.t
 {%- macro render_struct_body(s) -%}
 struct {{ s.template_alias }} {
 {% for f in s.fields -%}
-{{ render_field(f, "  ") }}
+{{ render_field(f, "  ", loop.first) }}
 {% endfor -%}
 };
 {%- endmacro %}
