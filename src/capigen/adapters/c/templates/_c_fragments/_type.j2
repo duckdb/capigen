@@ -1,7 +1,7 @@
 {% from "_c_fragments/_format.j2" import format_c_type %}
 
 {%- macro render_type(t, typedef_guard_prefix) -%}
-  {%- if t.description %}//! {{ t.description | c_line_comment }}
+  {%- if t.description %}{{ t.description | c_doc }}
 {% endif -%}
   {%- if t.tagged_struct -%}
 typedef struct _{{ t.name }} {

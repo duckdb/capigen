@@ -203,6 +203,109 @@ class TestUnionStructRendering:
         assert "//! out-of-line form" in content
 
 
+class TestDescriptionRendering:
+    """Descriptions render as prefixed comment lines, one per paragraph."""
+
+    def _metadata(self):
+        return {
+            "schema_version": "0.2.0",
+            "versions": ["1.0.0"],
+            "prefix": "duckdb_v2_",
+            "suffixes": {"handles": "_ptr", "callbacks": "_cb", "aliases": "_t"},
+            "primitives": [
+                {"name": "opaque", "c_type": "void"},
+                {"name": "i32", "c_type": "int32_t"},
+            ],
+        }
+
+    def _module(
+        self, handle_description="A connection\nto a database.", **func_overrides
+    ):
+        func = {
+            "summary": "Pings the database.",
+            "return_type": "i32",
+            "return_pointer": 0,
+            "return_const": False,
+            "parameters": {},
+        }
+        func.update(func_overrides)
+        return {
+            "module": "m",
+            "handles": {"conn": {"description": handle_description}},
+            "callbacks": {},
+            "aliases": {},
+            "structs": {},
+            "enums": {},
+            "constants": {},
+            "error_groups": {},
+            "functions": {"ping": func},
+        }
+
+    def test_hard_wrapped_description_becomes_one_line_comment(self, tmp_path):
+        output = tmp_path / "out.h"
+        generate([self._module()], self._metadata(), output)
+        assert "//! A connection to a database.\n" in output.read_text()
+
+    def test_multi_paragraph_description_becomes_a_block(self, tmp_path):
+        output = tmp_path / "out.h"
+        generate(
+            [self._module("A connection.\n\nDestroy it.")], self._metadata(), output
+        )
+        assert "/*!\n * A connection.\n *\n * Destroy it.\n */\n" in output.read_text()
+
+    def test_a_documented_entry_is_separated_from_the_previous_one(self, tmp_path):
+        """Same rule everywhere: a doc comment never butts the entry above it."""
+        module = self._module()
+        module["constants"] = {
+            "FIRST": {"value": 1, "description": "The first."},
+            "SECOND": {"value": 2, "description": "The second."},
+        }
+        module["enums"] = {
+            "MODE": {
+                "values": {
+                    "MODE_A": {"value": 0, "description": "Mode a."},
+                    "MODE_B": {"value": 1, "description": "Mode b."},
+                }
+            }
+        }
+        output = tmp_path / "out.h"
+        generate([module], self._metadata(), output)
+        content = output.read_text()
+        assert "#define DUCKDB_V2_FIRST 1\n\n//! The second." in content
+        assert "DUCKDB_V2_MODE_A = 0,\n\n  //! Mode b." in content
+        # Inside a braced body the first entry still follows the opener directly.
+        assert "typedef enum DUCKDB_V2_MODE {\n  //! Mode a." in content
+
+    def test_every_doc_comment_line_carries_a_prefix(self, tmp_path):
+        """A C formatter can only reflow a comment whose lines are all prefixed."""
+        output = tmp_path / "out.h"
+        generate(
+            [
+                self._module(
+                    description="Long prose\nwrapped in the spec.",
+                    parameters={
+                        "x": {
+                            "type": "i32",
+                            "indirection": 0,
+                            "const": False,
+                            "description": "A parameter\nwith a wrapped description.",
+                        }
+                    },
+                )
+            ],
+            self._metadata(),
+            output,
+        )
+        block = output.read_text().split("/*!")[-1].split("*/")[0]
+        assert [
+            line
+            for line in block.splitlines()
+            if line.strip() and not line.startswith(" *")
+        ] == []
+        assert " * Long prose wrapped in the spec." in block
+        assert " * @param x A parameter with a wrapped description." in block
+
+
 class TestMacroOptions:
     """The C adapter's macro names and banner come from options.c."""
 
