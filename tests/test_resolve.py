@@ -52,6 +52,7 @@ class TestResolveCOptions:
         assert opts["extension_api_macro"] == "DUCKDB_EXTENSION_API"
         assert opts["deprecated_macro"] == "DUCKDB_DEPRECATED"
         assert opts["no_deprecated_guard"] == "DUCKDB_API_NO_DEPRECATED"
+        assert opts["unstable_guard"] == "DUCKDB_API_UNSTABLE"
         assert opts["typedef_guard_prefix"] == "DUCKDB_TYPEDEF_"
 
     def test_defaults_scale_with_prefix(self):
@@ -77,6 +78,7 @@ class TestResolveCOptions:
                     "extension_api_macro": "MY_EXT_API",
                     "deprecated_macro": "MY_DEPRECATED",
                     "no_deprecated_guard": "MY_NO_DEPRECATED",
+                    "unstable_guard": "MY_UNSTABLE",
                     "typedef_guard_prefix": "MY_TYPEDEF_",
                     "banner": "// custom banner",
                 }
@@ -87,8 +89,27 @@ class TestResolveCOptions:
         assert opts["extension_api_macro"] == "MY_EXT_API"
         assert opts["deprecated_macro"] == "MY_DEPRECATED"
         assert opts["no_deprecated_guard"] == "MY_NO_DEPRECATED"
+        assert opts["unstable_guard"] == "MY_UNSTABLE"
         assert opts["typedef_guard_prefix"] == "MY_TYPEDEF_"
         assert opts["banner"] == "// custom banner"
+
+    def test_unstable_guard_shared_with_extension_adapter(self):
+        """options.extension.unstable_guard is the fallback, so one macro opts in everywhere."""
+        meta = {
+            "prefix": "duckdb_",
+            "options": {"extension": {"unstable_guard": "EXT_UNSTABLE"}},
+        }
+        assert resolve_c_options(meta)["unstable_guard"] == "EXT_UNSTABLE"
+
+    def test_explicit_unstable_guard_wins_over_extension(self):
+        meta = {
+            "prefix": "duckdb_",
+            "options": {
+                "c": {"unstable_guard": "C_UNSTABLE"},
+                "extension": {"unstable_guard": "EXT_UNSTABLE"},
+            },
+        }
+        assert resolve_c_options(meta)["unstable_guard"] == "C_UNSTABLE"
 
 
 class TestResolveHandles:
@@ -787,3 +808,116 @@ class TestResolveModule:
         assert m.error_groups == []
         assert m.function_ptrs == []
         assert m.functions == {}
+
+
+UNSTABLE = [["unstable", "v1.0.0", "2026-01-01"]]
+
+
+class TestUnstableStatus:
+    """The current (top) status entry decides the unstable flag."""
+
+    def test_handle_unstable(self, metadata, make_module):
+        modules = [make_module("m", handles={"h": {"status": UNSTABLE}})]
+        result = resolve_modules(modules, metadata)
+        assert result[0].types[0].unstable is True
+
+    def test_no_status_is_not_unstable(self, metadata, make_module):
+        modules = [make_module("m", handles={"h": {}})]
+        result = resolve_modules(modules, metadata)
+        assert result[0].types[0].unstable is False
+
+    def test_stabilized_history_is_not_unstable(self, metadata, make_module):
+        """An older unstable entry below a stable top entry does not gate."""
+        status = [
+            ["stable", "v1.1.0", "2026-06-01"],
+            ["unstable", "v1.0.0", "2026-01-01"],
+        ]
+        modules = [make_module("m", handles={"h": {"status": status}})]
+        result = resolve_modules(modules, metadata)
+        assert result[0].types[0].unstable is False
+
+    def test_alias_unstable(self, metadata, make_module):
+        modules = [
+            make_module("m", aliases={"a": {"underlying": "u32", "status": UNSTABLE}})
+        ]
+        result = resolve_modules(modules, metadata)
+        assert result[0].types[0].unstable is True
+
+    def test_qualified_alias_unstable(self, metadata, make_module):
+        modules = [
+            make_module(
+                "m",
+                aliases={
+                    "idx_t": {
+                        "underlying": "u64",
+                        "qualified": True,
+                        "status": UNSTABLE,
+                    }
+                },
+            )
+        ]
+        result = resolve_modules(modules, metadata)
+        assert result[0].types[0].unstable is True
+
+    def test_struct_unstable(self, metadata, make_module):
+        modules = [
+            make_module(
+                "m",
+                structs={
+                    "s": {
+                        "fields": [
+                            {"name": "f", "type": "u32", "pointer": 0, "const": False}
+                        ],
+                        "status": UNSTABLE,
+                    }
+                },
+            )
+        ]
+        result = resolve_modules(modules, metadata)
+        assert result[0].structs[0].unstable is True
+
+    def test_callback_unstable(self, metadata, make_module):
+        modules = [
+            make_module(
+                "m",
+                callbacks={
+                    "cb": {
+                        "return_type": "opaque",
+                        "return_pointer": 0,
+                        "return_const": False,
+                        "parameters": {},
+                        "status": UNSTABLE,
+                    }
+                },
+            )
+        ]
+        result = resolve_modules(modules, metadata)
+        assert result[0].function_ptrs[0].unstable is True
+
+    def test_enum_unstable(self, metadata, make_module):
+        modules = [
+            make_module("m", enums={"E": {"values": {"A": {}}, "status": UNSTABLE}})
+        ]
+        result = resolve_modules(modules, metadata)
+        assert result[0].enums[0].unstable is True
+
+    def test_function_unstable(self, metadata, make_module):
+        modules = [
+            make_module(
+                "m",
+                functions={
+                    "f": {
+                        "summary": "x",
+                        "return_type": "i32",
+                        "return_pointer": 0,
+                        "return_const": False,
+                        "parameters": {},
+                        "status": UNSTABLE,
+                    }
+                },
+            )
+        ]
+        result = resolve_modules(modules, metadata)
+        f = result[0].functions["f"]
+        assert f.unstable is True
+        assert f.deprecated is None

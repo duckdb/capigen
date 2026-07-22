@@ -19,6 +19,12 @@ from .render import (
 )
 
 
+def _is_unstable(d: dict) -> bool:
+    """True when the top (current) entry of the status stack is 'unstable'."""
+    status = d.get("status") or []
+    return bool(status) and status[0][0] == "unstable"
+
+
 def _default_banner(prefix: str) -> str:
     """Build a generic header banner, using an uppercased prefix as the name."""
     rule = f"//==={'-' * 70}===//"
@@ -43,7 +49,10 @@ def resolve_c_options(metadata: dict) -> dict[str, str | int]:
     """Resolve C-adapter macro names, banner, and the comment column budget."""
     prefix = metadata.get("prefix", "")
     uprefix = prefix.upper()
-    c = metadata.get("options", {}).get("c", {})
+    options = metadata.get("options", {})
+    c = options.get("c", {})
+    # Shared with the extension_header adapter, so one macro opts in everywhere.
+    ext_unstable_guard = options.get("extension", {}).get("unstable_guard")
     return {
         # Only decides `//!` line vs `/*! ... */` block; wrapping is the formatter's.
         "comment_width": c.get("comment_width", DEFAULT_WIDTH),
@@ -52,6 +61,9 @@ def resolve_c_options(metadata: dict) -> dict[str, str | int]:
         "deprecated_macro": c.get("deprecated_macro", f"{uprefix}DEPRECATED"),
         "no_deprecated_guard": c.get(
             "no_deprecated_guard", f"{uprefix}API_NO_DEPRECATED"
+        ),
+        "unstable_guard": c.get(
+            "unstable_guard", ext_unstable_guard or f"{uprefix}API_UNSTABLE"
         ),
         "typedef_guard_prefix": c.get("typedef_guard_prefix", f"{uprefix}TYPEDEF_"),
         "banner": c.get("banner", _default_banner(prefix)),
@@ -246,6 +258,7 @@ def _resolve_handle(
         is_pointer=True,
         tagged_struct=tagged_struct,
         description=h.get("description", ""),
+        unstable=_is_unstable(h),
     )
 
 
@@ -266,6 +279,7 @@ def _resolve_alias(
             is_pointer=False,
             is_qualified=True,
             description=a.get("description", ""),
+            unstable=_is_unstable(a),
         )
     prefixed = _apply_prefix(prefix, name)
     return CTypeDef(
@@ -274,6 +288,7 @@ def _resolve_alias(
         base=base,
         is_pointer=False,
         description=a.get("description", ""),
+        unstable=_is_unstable(a),
     )
 
 
@@ -346,6 +361,7 @@ def _resolve_struct(
         pointer_alias=s.get("pointer_alias", False),
         fields=fields,
         description=s.get("description", ""),
+        unstable=_is_unstable(s),
     )
 
 
@@ -384,6 +400,7 @@ def _resolve_callback(
         return_const=cb["return_const"],
         params=params,
         description=cb.get("description", ""),
+        unstable=_is_unstable(cb),
     )
 
 
@@ -421,6 +438,7 @@ def _resolve_function(
         deprecated=deprecated,
         return_c=return_c,
         static_inline=bool(func.get("static_inline", False)),
+        unstable=_is_unstable(func),
         parameters=params,
     )
 
@@ -443,6 +461,7 @@ def _resolve_enum(name: str, enum: dict, prefix: str = "") -> CEnum:
         name=_apply_prefix(prefix, name),
         description=enum.get("description", ""),
         values=resolved_values,
+        unstable=_is_unstable(enum),
     )
 
 

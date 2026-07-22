@@ -6,6 +6,9 @@
 /* --- Enums for {{ module.name }} --- */
 
 {% for enum in module.enums %}
+{% if enum.unstable %}
+#ifdef {{ c_opts.unstable_guard }}
+{% endif %}
 {% if enum.description %}{{ enum.description | c_doc }}
 {% endif %}typedef enum {{ enum.name }} {
   {% for value_name, value in enum.values.items() %}
@@ -18,20 +21,35 @@
   {{ value_name }} = {{ value.value }},
   {% endfor %}
 } {{ enum.name }};
+{% if enum.unstable %}
+#endif
+{% endif %}
 
 {% endfor %}
 
 /* --- Struct forward declarations for {{ module.name }} --- */
 
 {% for s in module.structs %}
+{% if s.unstable %}
+#ifdef {{ c_opts.unstable_guard }}
+{% endif %}
 {{ render_struct_fwd(s) }}
+{% if s.unstable %}
+#endif
+{% endif %}
 
 {% endfor %}
 
 /* --- Types for {{ module.name }} --- */
 
 {% for type in module.types %}
+{% if type.unstable %}
+#ifdef {{ c_opts.unstable_guard }}
+{% endif %}
 {{ render_type(type, c_opts.typedef_guard_prefix) }}
+{% if type.unstable %}
+#endif
+{% endif %}
 
 {% endfor %}
 
@@ -61,7 +79,13 @@
 /* --- Function pointer typedefs for {{ module.name }} --- */
 
 {% for fp in module.function_ptrs %}
+{% if fp.unstable %}
+#ifdef {{ c_opts.unstable_guard }}
+{% endif %}
 {{ render_funcptr(fp) }}
+{% if fp.unstable %}
+#endif
+{% endif %}
 
 {% endfor %}
 
@@ -70,6 +94,9 @@
 {% for func_name, func in module.functions.items() %}
 {% if not func.static_inline and not (func.deprecated and dep_enc == 'none') %}
 
+{% if func.unstable %}
+#ifdef {{ c_opts.unstable_guard }}
+{% endif %}
 {% if func.deprecated %}
 #ifndef {{ c_opts.no_deprecated_guard }}
 {% endif %}
@@ -100,12 +127,21 @@
 {% if func.deprecated %}
 #endif
 {% endif %}
+{% if func.unstable %}
+#endif
+{% endif %}
 {% endif %}
 {% endfor %}
 
 /* --- Struct definitions for {{ module.name }} --- */
 
 {% for s in module.structs %}
+{% if s.unstable %}
+#ifdef {{ c_opts.unstable_guard }}
+{% endif %}
 {{ render_struct_body(s) }}
+{% if s.unstable %}
+#endif
+{% endif %}
 
 {% endfor %}

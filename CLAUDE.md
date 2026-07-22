@@ -187,6 +187,36 @@ default. The schema validates only the top-level shape of `options`, so a typo u
 Changing a handle's style is an ABI break. The typedef name stays the same but the type
 identity does not. Decide per handle when you introduce it.
 
+### Unstable gating
+
+A construct whose current status is `unstable` (the top entry of its `status` stack) is
+guarded in the generated header. Consumers opt in by defining the guard macro:
+
+```c
+#ifdef LIB_API_UNSTABLE
+//! An experimental scratch buffer.
+typedef void *lib_scratch_ptr;
+#endif
+```
+
+This applies to every construct that accepts `status`: handles, callbacks, aliases,
+structs, enums, and functions. A struct's forward declaration and its definition are
+both guarded.
+
+The guard token comes from `options.c.unstable_guard`. It falls back to
+`options.extension.unstable_guard`, shared with the extension_header adapter so one
+macro opts in everywhere, and then to `{PREFIX}API_UNSTABLE`. The gate is always opt-in
+(`#ifdef`), unlike the deprecated gate, which is opt-out (`#ifndef`).
+
+Cross-module validation rejects a symbol that is not itself unstable but references an
+unstable type. Such a reference would break the header whenever the guard is off. Mark
+the referrer unstable too, or stabilize the type first.
+
+The bridge adapter still generates stubs for unstable functions. The engine always
+implements them; the guard only hides the declarations from consumers. The stub file
+defines the guard before its include, so the engine side compiles the full surface
+without extra build flags.
+
 ### Qualified aliases
 
 By default an alias gets the prefix and the alias suffix. Set `qualified: true` to emit

@@ -39,6 +39,7 @@ class CTypeDef:
     tagged_struct: bool = False  # True -> implies a pointer typedef + is_pointer=True
     is_qualified: bool = False
     description: str = ""
+    unstable: bool = False
 
 
 @dataclass
@@ -48,6 +49,7 @@ class CStruct:
     pointer_alias: bool
     fields: list[CField]
     description: str = ""
+    unstable: bool = False
 
 
 @dataclass
@@ -67,6 +69,7 @@ class CFuncPtr:
     return_const: bool
     params: list[CFuncPtrParam]
     description: str = ""
+    unstable: bool = False
 
 
 @dataclass
@@ -84,6 +87,7 @@ class CFunction:
     deprecated: str | None
     return_c: str
     static_inline: bool = False
+    unstable: bool = False
     parameters: dict[str, CParam] = field(default_factory=dict)
 
 
@@ -98,6 +102,7 @@ class CEnum:
     name: str
     description: str
     values: dict[str, CEnumValue]
+    unstable: bool = False
 
 
 @dataclass

@@ -53,6 +53,11 @@ status:
   - ["frozen", "v1.5.4", "2026-05-18"]
 ```
 
+A construct whose current state is `unstable` is emitted behind an opt-in `#ifdef`
+guard by the C adapter. A symbol that is not itself unstable must not reference an
+unstable type; validation rejects it. The guard token is `options.c.unstable_guard`,
+falling back to `options.extension.unstable_guard`, then to `{PREFIX}API_UNSTABLE`.
+
 ---
 
 ## metadata.yaml

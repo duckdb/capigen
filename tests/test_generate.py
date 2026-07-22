@@ -36,6 +36,8 @@ class TestRoundTrip:
         assert "duckdb_v2_database_ptr" in content
         assert "DUCKDB_V2_TYPE" in content
         assert "DUCKDB_V2_API_ERROR" in content
+        # The unstable constructs in the testspec render behind the opt-in guard.
+        assert "#ifdef DUCKDB_V2_API_UNSTABLE" in content
 
     def test_output_is_deterministic(self, tmp_path):
         """Running the generator twice produces identical output."""
@@ -167,6 +169,18 @@ class TestUnionStructRendering:
             "error_groups": {},
             "functions": {},
         }
+
+    def test_struct_description_attaches_to_definition(self, tmp_path):
+        """The docstring belongs on the struct body, not the forward declaration."""
+        module = self._module()
+        module["structs"]["duckdb_v2_string"]["description"] = "An inlinable string."
+        output = tmp_path / "out.h"
+        generate([module], self._metadata(), output)
+        content = output.read_text()
+        assert "//! An inlinable string.\nstruct duckdb_v2_string {" in content
+        assert (
+            "//! An inlinable string.\ntypedef struct duckdb_v2_string" not in content
+        )
 
     def test_union_struct_renders(self, tmp_path):
         output = tmp_path / "out.h"
@@ -377,6 +391,231 @@ class TestMacroOptions:
         assert "duckdb_v2_ping(void);" in content
 
 
+UNSTABLE = [["unstable", "v1.0.0", "2026-01-01"]]
+
+
+class TestUnstableGating:
+    """A construct whose current status is unstable renders behind an opt-in #ifdef."""
+
+    def _metadata(self, **options):
+        meta = {
+            "schema_version": "0.4",
+            "versions": ["1.0.0"],
+            "prefix": "duckdb_v2_",
+            "suffixes": {"handles": "_ptr", "callbacks": "_cb", "aliases": "_t"},
+            "primitives": [
+                {"name": "opaque", "c_type": "void"},
+                {"name": "i32", "c_type": "int32_t"},
+                {"name": "u32", "c_type": "uint32_t"},
+            ],
+        }
+        if options:
+            meta["options"] = options
+        return meta
+
+    def _module(self, **overrides):
+        mod = {
+            "module": "m",
+            "handles": {},
+            "callbacks": {},
+            "aliases": {},
+            "structs": {},
+            "enums": {},
+            "constants": {},
+            "error_groups": {},
+            "functions": {},
+        }
+        mod.update(overrides)
+        return mod
+
+    def _generate(self, module, metadata, tmp_path):
+        output = tmp_path / "out.h"
+        generate([module], metadata, output)
+        return output.read_text()
+
+    def test_unstable_handle_is_guarded(self, tmp_path):
+        module = self._module(handles={"scratch": {"status": UNSTABLE}})
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert (
+            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
+            "typedef void* duckdb_v2_scratch_ptr;\n"
+            "#endif" in content
+        )
+
+    def test_stable_handle_is_not_guarded(self, tmp_path):
+        module = self._module(handles={"ctx": {}})
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert "#ifdef DUCKDB_V2_API_UNSTABLE" not in content
+
+    def test_guard_wraps_the_doc_comment(self, tmp_path):
+        module = self._module(
+            handles={"scratch": {"description": "Experimental.", "status": UNSTABLE}}
+        )
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert (
+            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
+            "//! Experimental.\n"
+            "typedef void* duckdb_v2_scratch_ptr;\n"
+            "#endif" in content
+        )
+
+    def test_unstable_alias_is_guarded(self, tmp_path):
+        module = self._module(
+            aliases={"count": {"underlying": "u32", "status": UNSTABLE}}
+        )
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert (
+            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
+            "typedef uint32_t duckdb_v2_count_t;\n"
+            "#endif" in content
+        )
+
+    def test_unstable_enum_is_guarded(self, tmp_path):
+        module = self._module(
+            enums={"MODE": {"values": {"MODE_A": {"value": 0}}, "status": UNSTABLE}}
+        )
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert "#ifdef DUCKDB_V2_API_UNSTABLE\ntypedef enum DUCKDB_V2_MODE {" in content
+        assert "} DUCKDB_V2_MODE;\n#endif" in content
+
+    def test_unstable_callback_is_guarded(self, tmp_path):
+        module = self._module(
+            callbacks={
+                "notify": {
+                    "return_type": "opaque",
+                    "return_pointer": 0,
+                    "return_const": False,
+                    "parameters": {},
+                    "status": UNSTABLE,
+                }
+            }
+        )
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert (
+            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
+            "typedef void (*duckdb_v2_notify_cb)(void);\n"
+            "#endif" in content
+        )
+
+    def test_unstable_struct_guards_forward_declaration_and_body(self, tmp_path):
+        module = self._module(
+            structs={
+                "point": {
+                    "fields": [
+                        {"name": "x", "type": "i32", "pointer": 0, "const": False}
+                    ],
+                    "status": UNSTABLE,
+                }
+            }
+        )
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert (
+            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
+            "typedef struct duckdb_v2_point duckdb_v2_point;\n"
+            "#endif" in content
+        )
+        assert "#ifdef DUCKDB_V2_API_UNSTABLE\nstruct duckdb_v2_point {" in content
+        assert "};\n#endif" in content
+
+    def test_unstable_function_is_guarded(self, tmp_path):
+        module = self._module(
+            functions={
+                "poke": {
+                    "summary": "Pokes.",
+                    "return_type": "i32",
+                    "return_pointer": 0,
+                    "return_const": False,
+                    "parameters": {},
+                    "status": UNSTABLE,
+                }
+            }
+        )
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert "#ifdef DUCKDB_V2_API_UNSTABLE" in content
+        declaration = content.split("#ifdef DUCKDB_V2_API_UNSTABLE", 1)[1]
+        declaration = declaration.split("#endif", 1)[0]
+        assert "duckdb_v2_poke(void);" in declaration
+
+    def test_guard_token_from_extension_options(self, tmp_path):
+        """options.extension.unstable_guard is shared, and the gate stays opt-in."""
+        module = self._module(handles={"scratch": {"status": UNSTABLE}})
+        content = self._generate(
+            module,
+            self._metadata(extension={"unstable_guard": "SHARED_UNSTABLE"}),
+            tmp_path,
+        )
+        assert (
+            "#ifdef SHARED_UNSTABLE\n"
+            "typedef void* duckdb_v2_scratch_ptr;\n"
+            "#endif" in content
+        )
+
+    def test_guard_token_from_c_options_wins(self, tmp_path):
+        module = self._module(handles={"scratch": {"status": UNSTABLE}})
+        content = self._generate(
+            module,
+            self._metadata(
+                c={"unstable_guard": "C_UNSTABLE"},
+                extension={"unstable_guard": "SHARED_UNSTABLE"},
+            ),
+            tmp_path,
+        )
+        assert "#ifdef C_UNSTABLE" in content
+        assert "SHARED_UNSTABLE" not in content
+
+    def test_unstable_qualified_alias_nests_typedef_guard(self, tmp_path):
+        """The qualified alias's typedef guard nests inside the unstable guard."""
+        module = self._module(
+            aliases={
+                "idx_t": {"underlying": "u32", "qualified": True, "status": UNSTABLE}
+            }
+        )
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert (
+            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
+            "#ifndef DUCKDB_V2_TYPEDEF_IDX_T\n"
+            "#define DUCKDB_V2_TYPEDEF_IDX_T\n"
+            "typedef uint32_t idx_t;\n"
+            "#endif\n"
+            "#endif" in content
+        )
+
+    def test_unstable_tagged_struct_handle_is_guarded(self, tmp_path):
+        module = self._module(handles={"scratch": {"status": UNSTABLE}})
+        content = self._generate(
+            module,
+            self._metadata(c={"handles": {"default_style": "tagged_struct"}}),
+            tmp_path,
+        )
+        assert (
+            "#ifdef DUCKDB_V2_API_UNSTABLE\ntypedef struct _duckdb_v2_scratch {"
+            in content
+        )
+        assert "} * duckdb_v2_scratch_ptr;\n#endif" in content
+
+    def test_unstable_and_deprecated_guards_nest(self, tmp_path):
+        """Unstable wraps outside; deprecated nests inside; closed in reverse."""
+        module = self._module(
+            functions={
+                "old_poke": {
+                    "summary": "Pokes.",
+                    "return_type": "i32",
+                    "return_pointer": 0,
+                    "return_const": False,
+                    "parameters": {},
+                    "deprecated": "1.0.0",
+                    "status": UNSTABLE,
+                }
+            }
+        )
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert (
+            "#ifdef DUCKDB_V2_API_UNSTABLE\n#ifndef DUCKDB_V2_API_NO_DEPRECATED"
+            in content
+        )
+        assert "duckdb_v2_old_poke(void);\n#endif\n#endif" in content
+
+
 class TestSchemaVersion:
     def test_missing_schema_version(self, tmp_path):
         """metadata.yaml without schema_version is rejected by JSON Schema validation."""
@@ -417,6 +656,43 @@ class TestCompile:
         )
         assert result.returncode == 0, f"Header failed to compile:\n{result.stderr}"
 
+    def test_unstable_api_requires_optin(self, tmp_path):
+        """Unstable declarations exist only when the consumer defines the guard."""
+        metadata = load_metadata(TESTSPEC_DIR)
+        modules = load_modules(TESTSPEC_DIR)
+        output = tmp_path / "duckdb_v2.h"
+        generate(modules, metadata, output)
+
+        test_c = tmp_path / "test.c"
+        test_c.write_text(
+            '#include "duckdb_v2.h"\n'
+            "int main(void) { duckdb_v2_scratch_ptr s = 0; return !!s; }\n"
+        )
+
+        without = subprocess.run(
+            ["cc", "-fsyntax-only", "-xc", "-I", str(tmp_path), str(test_c)],
+            capture_output=True,
+            text=True,
+        )
+        assert without.returncode != 0, "unstable type visible without opt-in"
+
+        with_optin = subprocess.run(
+            [
+                "cc",
+                "-fsyntax-only",
+                "-xc",
+                "-DDUCKDB_V2_API_UNSTABLE",
+                "-I",
+                str(tmp_path),
+                str(test_c),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert with_optin.returncode == 0, (
+            f"Header failed to compile with opt-in:\n{with_optin.stderr}"
+        )
+
     def test_header_compiles_as_cpp(self, tmp_path):
         metadata = load_metadata(TESTSPEC_DIR)
         modules = load_modules(TESTSPEC_DIR)
@@ -433,4 +709,31 @@ class TestCompile:
         )
         assert result.returncode == 0, (
             f"Header failed to compile as C++:\n{result.stderr}"
+        )
+
+    def test_header_compiles_as_cpp_with_unstable_optin(self, tmp_path):
+        """The guarded region must be valid C++ too, or every opted-in C++ consumer breaks."""
+        metadata = load_metadata(TESTSPEC_DIR)
+        modules = load_modules(TESTSPEC_DIR)
+        output = tmp_path / "duckdb_v2.h"
+        generate(modules, metadata, output)
+
+        test_cpp = tmp_path / "test.cpp"
+        test_cpp.write_text('#include "duckdb_v2.h"\nint main() { return 0; }\n')
+
+        result = subprocess.run(
+            [
+                "cc",
+                "-fsyntax-only",
+                "-xc++",
+                "-DDUCKDB_V2_API_UNSTABLE",
+                "-I",
+                str(tmp_path),
+                str(test_cpp),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"Guarded region failed to compile as C++:\n{result.stderr}"
         )
