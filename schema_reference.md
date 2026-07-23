@@ -13,22 +13,22 @@ targets.
 
 ```yaml
 # metadata.yaml
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.4.0/src/capigen/schema/metadata.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.5.0/src/capigen/schema/metadata.schema.json
 ```
 
 ```yaml
 # a module file
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.4.0/src/capigen/schema/module.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.5.0/src/capigen/schema/module.schema.json
 ```
 
 Every schema change is at least a minor bump, so all patch tags in a `MAJOR.MINOR` line
-carry the same schema. Pin to the first tag of the line: `v0.4.0` for schema `0.4`.
+carry the same schema. Pin to the first tag of the line: `v0.5.0` for schema `0.5`.
 
 `raw.githubusercontent.com` serves the same files if you would rather not depend on
 jsDelivr. Keep the path, change the host:
 
 ```
-https://raw.githubusercontent.com/duckdb/capigen/v0.4.0/src/capigen/schema/module.schema.json
+https://raw.githubusercontent.com/duckdb/capigen/v0.5.0/src/capigen/schema/module.schema.json
 ```
 
 ## Two conventions first
@@ -39,19 +39,24 @@ out of the per-construct tables below.
 **`description`.** Optional string. Becomes a doc comment in the generated output. Every
 construct in a module file accepts one.
 
-**`status`.** Optional lifecycle history. A list of entries, newest first. The top entry
-is the current status. Each entry is `[state, version, date]`:
+**`lifecycle`.** Optional lifecycle history. A list of entries, newest first. The top
+entry is the construct's current state. Each entry is `[state, version, date]`:
 
-- `state`: one of `unstable`, `stable`, `frozen`, `deprecated`, `removed`.
+- `state`: names a state the spec declares (see `lifecycle_states` under metadata.yaml).
 - `version`: `vX.Y.Z`.
 - `date`: `YYYY-MM-DD`.
 
-`status` is accepted on handles, callbacks, aliases, structs, enums, and functions.
+`lifecycle` is accepted on handles, callbacks, aliases, structs, enums, and functions.
 
 ```yaml
-status:
+lifecycle:
   - ["frozen", "v1.5.4", "2026-05-18"]
 ```
+
+The current state's visibility decides how the C adapter emits the construct: plainly,
+behind a guard, or not at all. Cross-module validation checks each state name against
+the declared states, and rejects a construct that references anything some guard
+configuration compiles out while the construct itself remains present.
 
 ---
 
@@ -62,16 +67,50 @@ Global settings shared by all modules.
 | Field | Required | Description |
 |---|---|---|
 | `schema_version` | yes | Schema version this spec targets. `MAJOR.MINOR`. A legacy `MAJOR.MINOR.PATCH` is accepted and the patch is ignored. |
-| `versions` | yes | Known API version strings (semver). Validates `added` / `deprecated` on functions. |
+| `versions` | yes | The described API's known versions (`vX.Y.Z`). Validates `added` / `deprecated` on functions. The spec describes the API as of the latest of these. |
 | `suffixes` | yes | ABI naming suffix per construct type. See below. |
 | `primitives` | yes | Primitive type vocabulary. See below. |
 | `prefix` | no | Prepended to every generated identifier. E.g. `duckdb_v2_` gives `duckdb_v2_open`. Uppercased for constants and enum values. |
-| `options` | no | Adapter settings, keyed by adapter name (e.g. `c`, `bridge`, `extension`). Each adapter reads its own namespace. Free-form: not validated by the schema. |
+| `lifecycle_states` | no | The lifecycle states constructs can be in, and how each renders. See below. Only declared states exist. |
 
 ### suffixes
 
 Three keys, all required: `handles`, `callbacks`, `aliases`. Each value is the suffix
 for that construct (for example `_handle`, `_cb`, `_t`). The values are yours to choose.
+
+### lifecycle_states
+
+A map of state name to visibility. A construct's `lifecycle` entries must name
+declared states. Gated visibilities carry their macro token:
+
+```yaml
+lifecycle_states:
+  unstable:   {visibility: opt_in,  guard: LIB_API_UNSTABLE}
+  stable:     {visibility: always}
+  frozen:     {visibility: always}
+  deprecated: {visibility: opt_out, guard: LIB_API_NO_DEPRECATED}
+  removed:    {visibility: never}
+```
+
+| Visibility | Rendering | Guard |
+|---|---|---|
+| `always` | Always emitted. | forbidden |
+| `opt_in` | Behind `#ifdef guard`. The consumer defines the macro to get it. | required |
+| `opt_out` | Behind `#ifndef guard`. The consumer defines the macro to drop it. | required |
+| `never` | Not emitted at all. | forbidden |
+
+There is no built-in vocabulary. A spec declares every state it uses; without a
+`lifecycle_states` block no states exist, and any `lifecycle` entry fails validation.
+The block above is a conventional starting point, not a default.
+
+The guard token lives on the state, so every adapter reads the same declaration. The
+extension_header adapter gates appended members with the `unstable` state's guard and
+requires that state to be `opt_in`. The bridge adapter defines every `opt_in` guard at
+the top of the stub file, because the engine implements the full surface.
+
+A function's legacy `deprecated` field gates with the `deprecated` state's guard, and
+only when that state is declared with visibility `opt_out`. Without one, the field is
+metadata only.
 
 ### primitives (list items)
 
@@ -80,6 +119,64 @@ for that construct (for example `_handle`, `_cb`, `_t`). The values are yours to
 | `name` | yes | Abstract name used in specs (e.g. `u32`, `opaque`, `char`). |
 | `c_type` | yes | C type in the ABI (e.g. `uint32_t`, `void`). |
 | `underlying` | no | If set, the header emits `typedef <underlying> <c_type>;` in its preamble. |
+
+### Adapter options files
+
+metadata.yaml is pure spec. Adapter rendering options live in separate files in the
+reserved `options/` directory next to it, one per adapter, named after the adapter:
+
+```
+api_spec/v2/
+  metadata.yaml
+  options/
+    c.yaml
+    bridge.yaml
+    extension_header.yaml
+  <modules...>
+```
+
+The file's content is the adapter's options, flat (the filename is the namespace).
+Each adapter ships a strict schema for its file (`additionalProperties: false`), and
+the CLI validates the file against it before generating, so a typo fails loudly. Pass
+`--options PATH` to use a file outside the convention. The `options/` directory is
+never scanned for modules. For editor autocomplete, point the modeline at the
+adapter's schema:
+
+```yaml
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.5.0/src/capigen/adapters/c/options.schema.json
+```
+
+What a construct *is* lives in the spec proper (types, signatures, lifecycle states);
+how an adapter *renders* it lives in its options file. Guard tokens are not options:
+they live on the state declarations.
+
+`options/c.yaml`, all optional:
+
+| Field | Default | Description |
+|---|---|---|
+| `comment_width` | `120` | Column budget deciding `//!` line vs `/*! */` block. |
+| `export_macro` | `{PREFIX}C_API` | Symbol export/visibility macro on every declaration. |
+| `extension_export_macro` | `{PREFIX}EXTENSION_API` | Export macro for extension entrypoints. |
+| `deprecated_macro` | `{PREFIX}DEPRECATED` | Attribute macro name. |
+| `emit_deprecated_attribute` | `false` | Put the attribute macro on deprecated declarations. Presence is the states' job; this only adds the compiler warning. |
+| `typedef_guard_prefix` | `{PREFIX}TYPEDEF_` | Prefix of qualified-alias include guards. |
+| `banner` | derived | Verbatim banner at the top of the header. |
+| `handles` | `void_ptr` | `default_style` / `override_style`. See handle styles in `CLAUDE.md`. |
+| `emit_enum_max_member` | `true` | Append the int-max sentinel to every enum. |
+| `emit_v1_primitive_defs` | `false` | Emit the hand-rolled V1 preamble definitions. |
+| `emit_arrow_defs` | `false` | Emit the Arrow C Data Interface structs in the preamble. |
+| `emit_extension_api` | `false` | Emit the `duckdb_extension_access` struct. |
+
+`options/bridge.yaml`: `include_header` (header the stub file includes) and
+`stub_return` (expression every stub returns; required whenever a stub is generated).
+
+`options/extension_header.yaml`: `create_method`, `version_macro_prefix`, and
+`internal_include` are required; `exclude_functions` is optional. The struct's version
+is derived from the template's newest stable `// vX.Y.Z` region tag, never configured.
+
+Binding generators (for example DuckDB.jl's Julia generator) live with their
+binding, not here, and carry their own configuration. They read the spec through
+capigen's public library surface; see the capigen README.
 
 ---
 
@@ -96,7 +193,6 @@ aliases: {}
 structs: {}
 enums: {}
 constants: {}
-error_groups: {}
 functions: {}
 ```
 
@@ -120,7 +216,7 @@ handles:
 |---|---|---|---|
 | `cleanup_with` | no | none | Name of the function that destroys this handle. |
 
-Plus `description` and `status`.
+Plus `description` and `lifecycle`.
 
 ---
 
@@ -144,7 +240,7 @@ callbacks:
 | `return_const` | no | `false` | Const-qualify the return type. |
 | `parameters` | no | `{}` | Map of parameter name to Parameter. See below. |
 
-Plus `description` and `status`.
+Plus `description` and `lifecycle`.
 
 ---
 
@@ -164,7 +260,7 @@ aliases:
 | `underlying` | yes | none | The aliased type (primitive or declared). |
 | `qualified` | no | `false` | If true, emit the key verbatim: no prefix, no suffix. Use for names owned elsewhere (e.g. `idx_t`, `sel_t`). |
 
-Plus `description` and `status`.
+Plus `description` and `lifecycle`.
 
 ---
 
@@ -184,7 +280,7 @@ structs:
 | `pointer_alias` | no | `false` | Also emit a pointer typedef (name + aliases suffix). |
 | `fields` | no | `[]` | Ordered list of struct fields. See below. |
 
-Plus `description` and `status`.
+Plus `description` and `lifecycle`.
 
 ### Struct field
 
@@ -202,7 +298,7 @@ or `union` is present.
 | `fields` | aggregate | none | Anonymous nested struct. Excludes `type` and `union`. |
 | `union` | aggregate | none | Anonymous union of members. Excludes `type` and `fields`. |
 
-A field accepts `description`. It does not accept `status`.
+A field accepts `description`. It does not accept `lifecycle`.
 
 A union member has `name` (required), `fields` (required), and `description`.
 
@@ -242,7 +338,12 @@ enums:
 |---|---|---|---|
 | `values` | no | `{}` | Map of member name to value. Order sets auto-numbering. |
 
-Plus `description` and `status`.
+Plus `description` and `lifecycle`.
+
+The C adapter appends `<ENUM_NAME>_MAX_ENUM = 0x7FFFFFFF` as the last member of every
+enum. The int-max member pins the underlying type to at least 32 bits, so the ABI stops
+depending on compiler flags like `-fshort-enums`. A spec member with that exact name is
+an error. Disable globally with `options.c.emit_enum_max_member: false`.
 
 ### Enum value
 
@@ -250,7 +351,7 @@ Plus `description` and `status`.
 |---|---|---|---|
 | `value` | no | none | Explicit integer. If omitted, continues from the previous member. |
 
-Plus `description`. No `status`.
+Plus `description`. No `lifecycle`.
 
 ---
 
@@ -269,39 +370,7 @@ constants:
 |---|---|---|---|
 | `value` | yes | none | Integer or string expression. |
 
-Plus `description`. No `status`.
-
----
-
-## error_groups
-
-Hierarchical error codes. The full 32-bit value is `(group_id << 16) | code`.
-
-```yaml
-error_groups:
-  IO:
-    group_id: 0x0001
-    description: Input/output errors.
-    entries:
-      ERROR_IO_FILE_NOT_FOUND:
-        code: 0x0001
-        description: File not found.
-```
-
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `group_id` | yes | none | Upper 16 bits of the error code. |
-| `entries` | yes | none | Map of error name to entry. |
-
-Plus `description`. No `status`.
-
-### Error entry
-
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `code` | yes | none | Lower 16 bits of the error code. |
-
-Plus `description`. No `status`.
+Plus `description`. No `lifecycle`.
 
 ---
 
@@ -312,7 +381,7 @@ API function declarations.
 ```yaml
 functions:
   open:
-    summary: Open a database at the given path.
+    description: Open a database at the given path.
     role: constructor
     belongs_to: database
     parameters:
@@ -332,7 +401,6 @@ functions:
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `summary` | yes | none | One-line description. Used in the generated doc comment. |
 | `role` | no | `method` | One of `constructor`, `destructor`, `getter`, `setter`, `method`. |
 | `belongs_to` | no | none | The type this function operates on. |
 | `parameters` | no | `{}` | Map of parameter name to Parameter. Order sets the signature. |
@@ -340,11 +408,11 @@ functions:
 | `return_pointer` | no | `0` | Pointer indirection on the return type. |
 | `return_const` | no | `false` | Const-qualify the return type. |
 | `return_description` | no | none | Description of the return value. |
-| `added` | no | none | API version when introduced (semver). |
-| `deprecated` | no | none | API version when deprecated (semver). |
+| `added` | no | none | API version when introduced (`vX.Y.Z`, from `versions`). |
+| `deprecated` | no | none | API version when deprecated (`vX.Y.Z`, from `versions`). |
 | `static_inline` | no | `false` | Emit as a `static inline` in the header. |
 
-Plus `description` and `status`.
+Plus `description` and `lifecycle`.
 
 ---
 

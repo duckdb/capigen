@@ -39,6 +39,8 @@ class CTypeDef:
     tagged_struct: bool = False  # True -> implies a pointer typedef + is_pointer=True
     is_qualified: bool = False
     description: str = ""
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
 
 
 @dataclass
@@ -48,6 +50,8 @@ class CStruct:
     pointer_alias: bool
     fields: list[CField]
     description: str = ""
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
 
 
 @dataclass
@@ -67,6 +71,8 @@ class CFuncPtr:
     return_const: bool
     params: list[CFuncPtrParam]
     description: str = ""
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
 
 
 @dataclass
@@ -79,17 +85,19 @@ class CParam:
 @dataclass
 class CFunction:
     name: str
-    summary: str | None
     description: str | None
     deprecated: str | None
     return_c: str
     static_inline: bool = False
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
+    deprecated_gate: bool = False  # legacy `deprecated` field: wrap in #ifndef
     parameters: dict[str, CParam] = field(default_factory=dict)
 
 
 @dataclass
 class CEnumValue:
-    value: int
+    value: int | str  # str for expression values, e.g. the 0x7FFFFFFF sentinel
     description: str = ""
 
 
@@ -98,6 +106,8 @@ class CEnum:
     name: str
     description: str
     values: dict[str, CEnumValue]
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
 
 
 @dataclass
@@ -108,27 +118,11 @@ class CConstant:
 
 
 @dataclass
-class CErrorEntry:
-    name: str
-    code: int
-    description: str = ""
-
-
-@dataclass
-class CErrorGroup:
-    category: str
-    group_id: int
-    description: str
-    entries: list[CErrorEntry]
-
-
-@dataclass
 class CModule:
     name: str
     types: list[CTypeDef]
     structs: list[CStruct]
     enums: list[CEnum]
     constants: list[CConstant]
-    error_groups: list[CErrorGroup]
     function_ptrs: list[CFuncPtr]
     functions: dict[str, CFunction]

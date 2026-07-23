@@ -109,12 +109,26 @@ def load_metadata(spec_dir: Path) -> dict:
     return data
 
 
+def load_options(options_path: Path, schema_path: Path) -> dict:
+    """Load an adapter options file and validate it against the adapter's schema."""
+    schema = json.loads(Path(schema_path).read_text())
+    data = yaml.safe_load(options_path.read_text()) or {}
+    jsonschema.validate(data, schema)
+    return data
+
+
 def load_modules(spec_dir: Path) -> list[dict]:
-    """Load and validate all module YAML files from spec_dir."""
+    """Load and validate all module YAML files from spec_dir.
+
+    The top-level `options/` directory is reserved for adapter options files
+    and is not scanned for modules.
+    """
     schema = _load_schema("module.schema.json")
     modules = []
     for path in sorted(spec_dir.rglob("*.yaml")):
         if path.name == "metadata.yaml":
+            continue
+        if path.relative_to(spec_dir).parts[0] == "options":
             continue
         data = yaml.safe_load(path.read_text())
         try:

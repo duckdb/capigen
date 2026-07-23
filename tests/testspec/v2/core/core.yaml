@@ -4,6 +4,10 @@ handles:
     description: An opaque context handle
   database:
     description: An opaque handle to a database instance
+  scratch:
+    description: An experimental scratch buffer
+    lifecycle:
+      - ["unstable", "v1.0.0", "2026-01-01"]
 aliases:
   error_code:
     underlying: u32
@@ -22,7 +26,7 @@ constants:
     value: 0xFFFFFFFF
 functions:
   open:
-    summary: "Opens a database."
+    description: "Opens a database."
     return_type: API_CALL
     return_pointer: 0
     return_const: false
@@ -41,7 +45,7 @@ functions:
         const: false
         kind: OUT
   close:
-    summary: "Closes a database."
+    description: "Closes a database."
     return_type: API_CALL
     return_pointer: 0
     return_const: false
@@ -54,3 +58,33 @@ functions:
         type: database
         indirection: 1
         const: false
+  legacy_open:
+    description: "Opens a database the old way."
+    lifecycle:
+      - ["removed", "v1.0.0", "2026-01-01"]
+      - ["unstable", "v0.9.0", "2025-12-01"]
+    return_type: API_CALL
+    return_pointer: 0
+    return_const: false
+    parameters:
+      path:
+        type: char
+        indirection: 1
+        const: true
+  scratch_create:
+    description: "Creates a scratch buffer."
+    lifecycle:
+      - ["unstable", "v1.0.0", "2026-01-01"]
+    return_type: API_CALL
+    return_pointer: 0
+    return_const: false
+    parameters:
+      context:
+        type: ctx
+        indirection: 0
+        const: false
+      out_scratch:
+        type: scratch
+        indirection: 1
+        const: false
+        kind: OUT

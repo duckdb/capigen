@@ -10,36 +10,36 @@
 extern "C" {
 #endif
 
-#ifndef {{ c_opts.api_macro }}
+#ifndef {{ c_opts.export_macro }}
 #ifdef _WIN32
   #ifdef DUCKDB_STATIC_BUILD
-    #define {{ c_opts.api_macro }}
+    #define {{ c_opts.export_macro }}
   #elif defined(DUCKDB_BUILD_LIBRARY) && !defined(DUCKDB_BUILD_LOADABLE_EXTENSION)
-    #define {{ c_opts.api_macro }} __declspec(dllexport)
+    #define {{ c_opts.export_macro }} __declspec(dllexport)
   #else
-    #define {{ c_opts.api_macro }} __declspec(dllimport)
+    #define {{ c_opts.export_macro }} __declspec(dllimport)
   #endif
 #else
   #if defined(__GNUC__) || defined(__clang__)
-    #define {{ c_opts.api_macro }} __attribute__((visibility("default")))
+    #define {{ c_opts.export_macro }} __attribute__((visibility("default")))
   #else
-    #define {{ c_opts.api_macro }}
+    #define {{ c_opts.export_macro }}
   #endif
 #endif
 #endif
 
-#ifndef {{ c_opts.extension_api_macro }}
+#ifndef {{ c_opts.extension_export_macro }}
 #ifdef _WIN32
   #ifdef DUCKDB_STATIC_BUILD
-    #define {{ c_opts.extension_api_macro }}
+    #define {{ c_opts.extension_export_macro }}
   #else
-    #define {{ c_opts.extension_api_macro }} __declspec(dllexport)
+    #define {{ c_opts.extension_export_macro }} __declspec(dllexport)
   #endif
 #else
   #if defined(__GNUC__) || defined(__clang__)
-    #define {{ c_opts.extension_api_macro }} __attribute__((visibility("default")))
+    #define {{ c_opts.extension_export_macro }} __attribute__((visibility("default")))
   #else
-    #define {{ c_opts.extension_api_macro }}
+    #define {{ c_opts.extension_export_macro }}
   #endif
 #endif
 #endif
@@ -56,7 +56,7 @@ extern "C" {
 // General type definitions
 //===--------------------------------------------------------------------===//
 
-{% if metadata.get('options', {}).get('c', {}).get('emit_v1_primitive_defs', false) %}
+{% if c_opts.emit_v1_primitive_defs %}
 //! The internal representation of a VARCHAR (string_t). If the VARCHAR does not
 //! exceed 12 characters, then we inline it. Otherwise, we inline a four-byte prefix for faster
 //! string comparisons and store a pointer to the remaining characters. This is a non-
@@ -86,7 +86,7 @@ struct ArrowArray;
 
 {% endif %}
 
-{% if metadata.get('options', {}).get('c', {}).get('emit_arrow_defs', false) %}
+{% if c_opts.emit_arrow_defs %}
 // Arrow C Data Interface (https://arrow.apache.org/docs/format/CDataInterface.html).
 // Defined here so this header is self-contained: a binding author can allocate
 // and fill an ArrowSchema / ArrowArray with only this header. Guarded by the
@@ -143,7 +143,7 @@ struct ArrowArrayStream {
 
 {% endif %}
 
-{% for p in metadata.get('primitives', []) if p.get('underlying') %}
+{% for p in primitives if p.get('underlying') %}
 typedef {{ p.underlying }} {{ p.c_type }};
 {% endfor %}
 
@@ -155,7 +155,7 @@ typedef {{ p.underlying }} {{ p.c_type }};
 
 {% endfor %}
 
-{% if metadata.get('options', {}).get('c', {}).get('emit_extension_api', false) %}
+{% if c_opts.emit_extension_api %}
 //===--------------------------------------------------------------------===//
 // DuckDB extension access
 //===--------------------------------------------------------------------===//

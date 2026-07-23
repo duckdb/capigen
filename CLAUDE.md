@@ -35,6 +35,7 @@ committed output stays in sync with the spec.
 src/capigen/
   __init__.py     # __version__, SCHEMA_VERSION
   __main__.py     # CLI
+  spec.py         # capigen.load(): one-call load + validate, returns Spec
   loader.py       # load YAML, validate against JSON Schema, check schema_version
   validate.py     # cross-module referential integrity
   tools.py        # module dependency ordering
@@ -57,6 +58,13 @@ tests/            # pytest, with a self-contained testspec fixture tree
 Steps 1 to 3 are adapter-agnostic. Step 4 is the adapter.
 
 ## Versioning
+
+capigen's version pins the contract machinery: the schema, spec parsing and
+validation, and the C header and extension header generation. capigen version plus
+spec version equals the contract. ABI stability itself is duckdb-repo policy,
+enforced there through spec discipline; the lifecycle states are only the mechanism.
+Binding generators (DuckDB.jl's Julia layer) live with their bindings and consume
+the public library surface (loader, validate, states, tools).
 
 The package version and the schema version are coupled. `MAJOR.MINOR` of the package is
 the schema version. `PATCH` is tool-only. `SCHEMA_VERSION` is derived from the installed
@@ -145,7 +153,7 @@ Casing rules (`_apply_prefix` in `adapters/c/resolve.py`):
   bare name starts with a lowercase letter, and uppercased if it starts with an uppercase
   letter. So `connection` becomes `lib_connection_handle`, while `API_CALL` becomes
   `LIB_API_CALL_t`.
-- For enums, constants, error groups, enum members, and error entries, the prefix is
+- For enums, constants, and enum members, the prefix is
   always uppercased. These are macro and member names by convention.
 
 Setting `prefix: ""` (or omitting it) disables prefixing. Declared names become the C
@@ -168,24 +176,88 @@ typedef struct _lib_connection {
 } *lib_connection_handle;
 ```
 
-Configure it under the C adapter's namespace in `metadata.yaml`:
+Configure it in the C adapter's options file (`options/c.yaml` next to the spec's
+`metadata.yaml`):
 
 ```yaml
-options:
-  c:
-    handles:
-      default_style: tagged_struct   # void_ptr (default) or tagged_struct
-      override_style:
-        error_info: void_ptr         # keep this one a plain void*
+handles:
+  default_style: tagged_struct   # void_ptr (default) or tagged_struct
+  override_style:
+    error_info: void_ptr         # keep this one a plain void*
 ```
 
 `default_style` sets every handle. `override_style` maps a bare handle name to an
 alternative. Only `void_ptr` is honored as an override; any other value inherits the
-default. The schema validates only the top-level shape of `options`, so a typo under
-`options.c.handles` is not caught. Verify by inspecting the output.
+default. Each adapter's options file is validated against the adapter's own strict
+schema before generation, so a typo fails at load.
 
 Changing a handle's style is an ABI break. The typedef name stays the same but the type
 identity does not. Decide per handle when you introduce it.
+
+### Lifecycle states
+
+A construct's current state is the top entry of its `lifecycle` stack. The state's
+visibility decides how the C adapter emits the construct. `src/capigen/states.py` resolves the declared
+states; `schema_reference.md` documents the `lifecycle_states` block and the
+visibility table.
+
+There is no built-in vocabulary: a spec declares every state it uses under
+`lifecycle_states` in metadata, and guard tokens live on the state declaration, not
+in adapter options.
+The conventional block gates `unstable` opt-in (`#ifdef LIB_API_UNSTABLE`) and
+`deprecated` opt-out (`#ifndef LIB_API_NO_DEPRECATED`), keeps `stable` and `frozen`
+visible, and omits `removed`.
+
+```c
+#ifdef LIB_API_UNSTABLE
+//! An experimental scratch buffer.
+typedef void *lib_scratch_ptr;
+#endif
+```
+
+Gating applies to every construct that accepts `lifecycle`. A struct's forward declaration
+and its definition are both guarded. An omitted construct disappears from the header
+entirely.
+
+Cross-module validation enforces one invariant: a construct may reference a type only
+if every guard configuration that emits the construct also emits the type. So a visible
+construct cannot reference an unstable or removed type, opt-in constructs can only
+reference opt-in types under the same guard, and only omitted constructs reference
+omitted types.
+The check covers alias underlyings, struct fields, signatures, and a handle's
+`cleanup_with`.
+
+Per-adapter behavior:
+
+- The bridge adapter defines every opt-in guard at the top of the stub file, because
+  the engine implements the full surface. Omitted functions get no stub.
+- The extension_header adapter gates appended members with the `unstable` state's guard
+  and requires that state to be opt-in. Omitted functions are never appended, but a
+  frozen template member whose function is now removed keeps its slot, so the vtable
+  ABI never shifts.
+- A function with the legacy `deprecated` field (no status) still gates with the
+  deprecated state's guard via the template's own `#ifndef` wrap. The gate fires
+  only when the declared states include an opt-out `deprecated` state, so the
+  rendered guards always match what validation modeled.
+- The old token options (`unstable_guard`, `no_deprecated_guard`) fail the C
+  adapter's options schema, never silently ignored.
+
+The division of labor is strict: what a construct is, and whether it is emitted, is
+spec-level (types, signatures, states) and lives in metadata.yaml and the modules.
+How an adapter renders it lives in that adapter's options file
+(`options/<adapter>.yaml` next to the spec), validated against the adapter's own
+schema. No option changes emission, so validation's emission model is exact.
+`emit_deprecated_attribute` only adds the compiler warning attribute to deprecated
+declarations; dropping a construct is spelled `{visibility: never}` on its state.
+
+### Enum width pinning
+
+The C adapter appends `<ENUM>_MAX_ENUM = 0x7FFFFFFF` as the last member of every enum.
+The int-max member stops compilers from shrinking the underlying type (for example
+under `-fshort-enums`), so struct layout and call signatures stay fixed. It pins a
+floor, not an exact type. The value must stay int-max: pre-C23, an enum constant must
+fit in `int`. Disable with `options.c.emit_enum_max_member: false`. A spec member named
+exactly `<ENUM>_MAX_ENUM` is a resolve error.
 
 ### Qualified aliases
 

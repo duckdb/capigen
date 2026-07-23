@@ -1,12 +1,14 @@
 """Resolve API spec dicts into C-specific render objects for Jinja2 templates."""
 
+from ...states import State, current_state, resolve_states
+from ...tools import apply_prefix as _apply_prefix
+from ...tools import build_registry as _build_registry
+from ...tools import resolve_enum_values
 from .comments import DEFAULT_WIDTH
 from .render import (
     CConstant,
     CEnum,
     CEnumValue,
-    CErrorEntry,
-    CErrorGroup,
     CField,
     CFuncPtr,
     CFuncPtrParam,
@@ -17,6 +19,19 @@ from .render import (
     CTypeDef,
     CUnionMember,
 )
+
+
+def _gating(d: dict, states: dict[str, State]) -> tuple[bool, str]:
+    """How a construct's current state renders: (omitted, guard directive)."""
+    name = current_state(d)
+    state = states.get(name) if name else None
+    if state is None or state.visibility == "always":
+        return False, ""
+    if state.visibility == "never":
+        return True, ""
+    if state.visibility == "opt_in":
+        return False, f"#ifdef {state.guard}"
+    return False, f"#ifndef {state.guard}"  # opt_out
 
 
 def _default_banner(prefix: str) -> str:
@@ -39,31 +54,58 @@ def _default_banner(prefix: str) -> str:
     )
 
 
-def resolve_c_options(metadata: dict) -> dict[str, str | int]:
+def resolve_c_options(
+    metadata: dict,
+    options: dict | None = None,
+    states: dict[str, State] | None = None,
+) -> dict:
     """Resolve C-adapter macro names, banner, and the comment column budget."""
     prefix = metadata.get("prefix", "")
     uprefix = prefix.upper()
-    c = metadata.get("options", {}).get("c", {})
+    c = options or {}
+    if states is None:
+        states = resolve_states(metadata)
+    # The legacy `deprecated` field gates with the deprecated state's token.
+    # Without an opt_out deprecated state the gate never fires and the token
+    # stays empty.
+    dep = states.get("deprecated")
+    dep_guard = dep.guard if dep and dep.visibility == "opt_out" else ""
     return {
         # Only decides `//!` line vs `/*! ... */` block; wrapping is the formatter's.
         "comment_width": c.get("comment_width", DEFAULT_WIDTH),
-        "api_macro": c.get("api_macro", f"{uprefix}C_API"),
-        "extension_api_macro": c.get("extension_api_macro", f"{uprefix}EXTENSION_API"),
-        "deprecated_macro": c.get("deprecated_macro", f"{uprefix}DEPRECATED"),
-        "no_deprecated_guard": c.get(
-            "no_deprecated_guard", f"{uprefix}API_NO_DEPRECATED"
+        "export_macro": c.get("export_macro", f"{uprefix}C_API"),
+        "extension_export_macro": c.get(
+            "extension_export_macro", f"{uprefix}EXTENSION_API"
         ),
+        "deprecated_macro": c.get("deprecated_macro", f"{uprefix}DEPRECATED"),
+        "emit_deprecated_attribute": bool(c.get("emit_deprecated_attribute", False)),
+        "no_deprecated_guard": dep_guard,
         "typedef_guard_prefix": c.get("typedef_guard_prefix", f"{uprefix}TYPEDEF_"),
         "banner": c.get("banner", _default_banner(prefix)),
+        "emit_v1_primitive_defs": bool(c.get("emit_v1_primitive_defs", False)),
+        "emit_arrow_defs": bool(c.get("emit_arrow_defs", False)),
+        "emit_extension_api": bool(c.get("emit_extension_api", False)),
     }
 
 
-def resolve_modules(modules: list[dict], metadata: dict) -> list[CModule]:
-    """Transform validated API spec dicts into typed C render objects."""
+def resolve_modules(
+    modules: list[dict],
+    metadata: dict,
+    options: dict | None = None,
+    states: dict[str, State] | None = None,
+) -> list[CModule]:
+    """Transform validated API spec dicts into typed C render objects.
+
+    `options` is the C adapter's options dict; other adapters that only need
+    the function view may omit it. Pass `states` to reuse an already resolved
+    vocabulary.
+    """
     primitives = {p["name"]: p["c_type"] for p in metadata["primitives"]}
     suffixes = metadata["suffixes"]
     prefix = metadata.get("prefix", "")
-    c_options = metadata.get("options", {}).get("c", {})
+    if states is None:
+        states = resolve_states(metadata)
+    c_options = options or {}
     handle_opts = c_options.get("handles", {})
     handle_style = handle_opts.get("default_style", "void_ptr")
     void_ptr_handles = frozenset(
@@ -74,7 +116,14 @@ def resolve_modules(modules: list[dict], metadata: dict) -> list[CModule]:
     registry = _build_registry(modules, suffixes, prefix)
     return [
         _resolve_module(
-            mod, registry, primitives, suffixes, prefix, handle_style, void_ptr_handles
+            mod,
+            registry,
+            primitives,
+            suffixes,
+            states,
+            prefix,
+            handle_style,
+            void_ptr_handles,
         )
         for mod in modules
     ]
@@ -84,62 +133,6 @@ def _is_tagged_struct(
     name: str, handle_style: str, void_ptr_handles: frozenset[str]
 ) -> bool:
     return handle_style == "tagged_struct" and name not in void_ptr_handles
-
-
-def _apply_prefix(prefix: str, name: str) -> str:
-    """Prepend prefix, uppercasing it when name starts with an uppercase letter."""
-    if name and name[0].isupper():
-        return f"{prefix.upper()}{name}"
-    return f"{prefix}{name}"
-
-
-# ---------------------------------------------------------------------------
-# Registry: maps every known spec name (unprefixed) to its C name (prefixed)
-# ---------------------------------------------------------------------------
-
-
-def _build_registry(
-    modules: list[dict], suffixes: dict[str, str], prefix: str = ""
-) -> dict[str, str]:
-    """Build a name -> C-name registry from all declared types."""
-    registry: dict[str, str] = {}
-
-    for mod in modules:
-        for name in mod.get("handles", {}):
-            canonical = f"{_apply_prefix(prefix, name)}{suffixes['handles']}"
-            registry[name] = canonical
-            registry[canonical] = canonical
-
-        for name in mod.get("callbacks", {}):
-            canonical = f"{_apply_prefix(prefix, name)}{suffixes['callbacks']}"
-            registry[name] = canonical
-            registry[canonical] = canonical
-
-        for name, a in mod.get("aliases", {}).items():
-            if a.get("qualified"):
-                registry[name] = name
-            else:
-                canonical = f"{_apply_prefix(prefix, name)}{suffixes['aliases']}"
-                registry[name] = canonical
-                registry[canonical] = canonical
-
-        for name, s in mod.get("structs", {}).items():
-            prefixed = _apply_prefix(prefix, name)
-            if s.get("pointer_alias"):
-                alias = f"{prefixed}{suffixes['aliases']}"
-            else:
-                alias = prefixed
-            registry[name] = alias
-            registry[prefixed] = alias
-            if alias != prefixed:
-                registry[alias] = alias
-
-        for name in mod.get("enums", {}):
-            prefixed = _apply_prefix(prefix, name)
-            registry[name] = prefixed
-            registry[prefixed] = prefixed
-
-    return registry
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +169,7 @@ def _resolve_module(
     registry: dict[str, str],
     primitives: dict[str, str],
     suffixes: dict[str, str],
+    states: dict[str, State],
     prefix: str = "",
     handle_style: str = "void_ptr",
     void_ptr_handles: frozenset[str] = frozenset(),
@@ -189,22 +183,24 @@ def _resolve_module(
                     name,
                     h,
                     suffixes,
+                    states,
                     prefix,
                     _is_tagged_struct(name, handle_style, void_ptr_handles),
                 )
                 for name, h in mod.get("handles", {}).items()
             ]
             + [
-                _resolve_alias(name, a, registry, primitives, suffixes, prefix)
+                _resolve_alias(name, a, registry, primitives, suffixes, states, prefix)
                 for name, a in mod.get("aliases", {}).items()
             ]
         ),
         structs=[
-            _resolve_struct(name, s, registry, primitives, suffixes, prefix)
+            _resolve_struct(name, s, registry, primitives, suffixes, states, prefix)
             for name, s in mod.get("structs", {}).items()
         ],
         enums=[
-            _resolve_enum(name, e, prefix) for name, e in mod.get("enums", {}).items()
+            _resolve_enum(name, e, states, prefix)
+            for name, e in mod.get("enums", {}).items()
         ],
         constants=[
             CConstant(
@@ -214,17 +210,13 @@ def _resolve_module(
             )
             for name, c in mod.get("constants", {}).items()
         ],
-        error_groups=[
-            _resolve_error_group(category, g, prefix)
-            for category, g in mod.get("error_groups", {}).items()
-        ],
         function_ptrs=[
-            _resolve_callback(name, cb, registry, primitives, suffixes, prefix)
+            _resolve_callback(name, cb, registry, primitives, suffixes, states, prefix)
             for name, cb in mod.get("callbacks", {}).items()
         ],
         functions={
             f"{prefix}{fname}": _resolve_function(
-                f"{prefix}{fname}", func, registry, primitives
+                f"{prefix}{fname}", func, registry, primitives, states
             )
             for fname, func in mod.get("functions", {}).items()
         },
@@ -235,10 +227,12 @@ def _resolve_handle(
     name: str,
     h: dict,
     suffixes: dict[str, str],
+    states: dict[str, State],
     prefix: str = "",
     tagged_struct: bool = False,
 ) -> CTypeDef:
     prefixed = _apply_prefix(prefix, name)
+    omitted, guard_directive = _gating(h, states)
     return CTypeDef(
         name=prefixed,
         canonical_name=f"{prefixed}{suffixes['handles']}",
@@ -246,6 +240,8 @@ def _resolve_handle(
         is_pointer=True,
         tagged_struct=tagged_struct,
         description=h.get("description", ""),
+        omitted=omitted,
+        guard_directive=guard_directive,
     )
 
 
@@ -255,9 +251,11 @@ def _resolve_alias(
     registry: dict[str, str],
     primitives: dict[str, str],
     suffixes: dict[str, str],
+    states: dict[str, State],
     prefix: str = "",
 ) -> CTypeDef:
     base = _resolve_c_name(a["underlying"], registry, primitives, f"Alias '{name}'")
+    omitted, guard_directive = _gating(a, states)
     if a.get("qualified"):
         return CTypeDef(
             name=name,
@@ -266,6 +264,8 @@ def _resolve_alias(
             is_pointer=False,
             is_qualified=True,
             description=a.get("description", ""),
+            omitted=omitted,
+            guard_directive=guard_directive,
         )
     prefixed = _apply_prefix(prefix, name)
     return CTypeDef(
@@ -274,6 +274,8 @@ def _resolve_alias(
         base=base,
         is_pointer=False,
         description=a.get("description", ""),
+        omitted=omitted,
+        guard_directive=guard_directive,
     )
 
 
@@ -327,6 +329,7 @@ def _resolve_struct(
     registry: dict[str, str],
     primitives: dict[str, str],
     suffixes: dict[str, str],
+    states: dict[str, State],
     prefix: str = "",
 ) -> CStruct:
     prefixed = _apply_prefix(prefix, name)
@@ -340,12 +343,15 @@ def _resolve_struct(
         for f in s.get("fields", [])
     ]
 
+    omitted, guard_directive = _gating(s, states)
     return CStruct(
         name=prefixed,
         template_alias=alias,
         pointer_alias=s.get("pointer_alias", False),
         fields=fields,
         description=s.get("description", ""),
+        omitted=omitted,
+        guard_directive=guard_directive,
     )
 
 
@@ -355,6 +361,7 @@ def _resolve_callback(
     registry: dict[str, str],
     primitives: dict[str, str],
     suffixes: dict[str, str],
+    states: dict[str, State],
     prefix: str = "",
 ) -> CFuncPtr:
     prefixed = _apply_prefix(prefix, name)
@@ -374,6 +381,7 @@ def _resolve_callback(
             )
         )
 
+    omitted, guard_directive = _gating(cb, states)
     return CFuncPtr(
         name=prefixed,
         template_alias=alias,
@@ -384,11 +392,17 @@ def _resolve_callback(
         return_const=cb["return_const"],
         params=params,
         description=cb.get("description", ""),
+        omitted=omitted,
+        guard_directive=guard_directive,
     )
 
 
 def _resolve_function(
-    fname: str, func: dict, registry: dict[str, str], primitives: dict[str, str]
+    fname: str,
+    func: dict,
+    registry: dict[str, str],
+    primitives: dict[str, str],
+    states: dict[str, State],
 ) -> CFunction:
     params: dict[str, CParam] = {}
     for pname, p in func["parameters"].items():
@@ -407,57 +421,81 @@ def _resolve_function(
     )
     return_c = _format_c_type(return_base, func["return_pointer"], func["return_const"])
 
-    status = func.get("status", [])
-    current_state = status[0][0] if status else None
-    if current_state == "deprecated":
-        deprecated = status[0][1]
+    state_name = current_state(func)
+    if state_name == "deprecated":
+        deprecated = func["lifecycle"][0][1]
     else:
         deprecated = func.get("deprecated") or None
 
+    # A deprecated current state gates via its own guard directive; the legacy
+    # `deprecated` field gates via the extra #ifndef wrap in the template, and
+    # only when the declared states actually gate deprecation. This keeps the
+    # rendered guards identical to what validate_semantics models.
+    omitted, guard_directive = _gating(func, states)
+    dep_state = states.get("deprecated")
+    deprecated_gate = (
+        bool(deprecated)
+        and state_name != "deprecated"
+        and dep_state is not None
+        and dep_state.visibility == "opt_out"
+    )
+
     return CFunction(
         name=fname,
-        summary=func.get("summary") or None,
         description=func.get("description") or None,
         deprecated=deprecated,
         return_c=return_c,
         static_inline=bool(func.get("static_inline", False)),
+        omitted=omitted,
+        guard_directive=guard_directive,
+        deprecated_gate=deprecated_gate,
         parameters=params,
     )
 
 
-def _resolve_enum(name: str, enum: dict, prefix: str = "") -> CEnum:
-    """Auto-number enum values (sequential from 0, reset on explicit value)."""
+def _resolve_enum(
+    name: str,
+    enum: dict,
+    states: dict[str, State],
+    prefix: str = "",
+) -> CEnum:
+    """Auto-number enum values via the shared helper."""
     uprefix = prefix.upper()
-    resolved_values: dict[str, CEnumValue] = {}
-    current = 0
-    for vname, entry in enum["values"].items():
-        if entry.get("value") is not None:
-            current = entry["value"]
-        resolved_values[f"{uprefix}{vname}"] = CEnumValue(
-            value=current,
-            description=entry.get("description", ""),
+    c_name = _apply_prefix(prefix, name)
+    resolved_values = {
+        f"{uprefix}{vname}": CEnumValue(
+            value=value,
+            description=enum["values"][vname].get("description", ""),
         )
-        current += 1
+        for vname, value in resolve_enum_values(enum)
+    }
 
+    omitted, guard_directive = _gating(enum, states)
     return CEnum(
-        name=_apply_prefix(prefix, name),
+        name=c_name,
         description=enum.get("description", ""),
         values=resolved_values,
+        omitted=omitted,
+        guard_directive=guard_directive,
     )
 
 
-def _resolve_error_group(category: str, group: dict, prefix: str = "") -> CErrorGroup:
-    uprefix = prefix.upper()
-    return CErrorGroup(
-        category=category,
-        group_id=group["group_id"],
-        description=group.get("description", ""),
-        entries=[
-            CErrorEntry(
-                name=f"{uprefix}{ename}",
-                code=e["code"],
-                description=e.get("description", ""),
-            )
-            for ename, e in group["entries"].items()
-        ],
-    )
+def add_enum_sentinels(render_modules: list[CModule]) -> None:
+    """Append the int-max sentinel to every emitted enum.
+
+    The sentinel pins the underlying type to at least 32 bits, so the ABI
+    stops depending on compiler flags like -fshort-enums. This is C-header
+    policy: only the C adapter applies it, so the other adapters never see
+    sentinel members or the collision check.
+    """
+    for mod in render_modules:
+        for enum in mod.enums:
+            if enum.omitted:
+                continue
+            sentinel = f"{enum.name.upper()}_MAX_ENUM"
+            if sentinel in enum.values:
+                raise ValueError(
+                    f"Enum '{enum.name}': member '{sentinel}' collides with "
+                    "the generated max-value sentinel"
+                )
+            enum.values[sentinel] = CEnumValue(value="0x7FFFFFFF")

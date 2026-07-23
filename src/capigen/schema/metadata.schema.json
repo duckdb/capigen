@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:capigen:schema:metadata",
-  "description": "Schema for metadata.yaml — defines ABI naming conventions, primitive types, and API versions.",
+  "description": "Schema for metadata.yaml \u2014 defines ABI naming conventions, primitive types, and API versions.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,13 +17,14 @@
       "pattern": "^\\d+\\.\\d+(\\.\\d+)?$"
     },
     "versions": {
-      "description": "Supported API versions in semver format.",
+      "description": "The described API's known versions (vX.Y.Z), newest last or in any order. Validates 'added' / 'deprecated' on functions. The spec itself describes the API as of the latest of these.",
       "type": "array",
       "items": {
         "type": "string",
-        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        "pattern": "^v\\d+\\.\\d+\\.\\d+$"
       },
-      "uniqueItems": true
+      "uniqueItems": true,
+      "minItems": 1
     },
     "suffixes": {
       "description": "ABI naming suffixes applied to each construct type. Every adapter uses these to compute canonical names.",
@@ -61,12 +62,80 @@
       "description": "String prepended to all generated C identifiers (types, functions, constants). E.g. 'duckdb_v2_' yields 'duckdb_v2_open'; uppercase form used for constants/enum values.",
       "type": "string"
     },
-    "options": {
-      "description": "Adapter-specific rendering options, keyed by adapter name (e.g. 'c'). Each adapter reads its own namespace.",
-      "type": "object"
+    "lifecycle_states": {
+      "description": "The lifecycle states constructs can be in, and how each renders. Only declared states exist; a construct's 'lifecycle' entries must name them.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/StateDefinition"
+      }
     }
   },
   "$defs": {
+    "StateDefinition": {
+      "description": "When constructs in this state are emitted. always: unconditionally. opt_in: behind #ifdef guard. opt_out: behind #ifndef guard. never: not emitted at all. The guard is the macro token for the gated modes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "visibility"
+      ],
+      "properties": {
+        "guard": {
+          "description": "Macro token for opt_in / opt_out gating.",
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "always",
+            "opt_in",
+            "opt_out",
+            "never"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "visibility": {
+                "enum": [
+                  "opt_in",
+                  "opt_out"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "guard"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "visibility": {
+                "enum": [
+                  "always",
+                  "never"
+                ]
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "guard"
+              ]
+            }
+          }
+        }
+      ]
+    },
     "Primitive": {
       "type": "object",
       "additionalProperties": false,

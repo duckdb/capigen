@@ -5,7 +5,10 @@
 
 /* --- Enums for {{ module.name }} --- */
 
-{% for enum in module.enums %}
+{% for enum in module.enums if not enum.omitted %}
+{% if enum.guard_directive %}
+{{ enum.guard_directive }}
+{% endif %}
 {% if enum.description %}{{ enum.description | c_doc }}
 {% endif %}typedef enum {{ enum.name }} {
   {% for value_name, value in enum.values.items() %}
@@ -18,20 +21,35 @@
   {{ value_name }} = {{ value.value }},
   {% endfor %}
 } {{ enum.name }};
+{% if enum.guard_directive %}
+#endif
+{% endif %}
 
 {% endfor %}
 
 /* --- Struct forward declarations for {{ module.name }} --- */
 
-{% for s in module.structs %}
+{% for s in module.structs if not s.omitted %}
+{% if s.guard_directive %}
+{{ s.guard_directive }}
+{% endif %}
 {{ render_struct_fwd(s) }}
+{% if s.guard_directive %}
+#endif
+{% endif %}
 
 {% endfor %}
 
 /* --- Types for {{ module.name }} --- */
 
-{% for type in module.types %}
+{% for type in module.types if not type.omitted %}
+{% if type.guard_directive %}
+{{ type.guard_directive }}
+{% endif %}
 {{ render_type(type, c_opts.typedef_guard_prefix) }}
+{% if type.guard_directive %}
+#endif
+{% endif %}
 
 {% endfor %}
 
@@ -44,44 +62,32 @@
 {% endif %}#define {{ const.name }} {{ const.value }}
 {% endfor %}
 
-/* --- Error Codes for {{ module.name }} --- */
-{% for group in module.error_groups %}
-{% if group.description %}
-
-{{ group.description | c_doc }}
-{% endif %}
-{% for entry in group.entries %}
-{% if entry.description %}
-
-{{ entry.description | c_doc }}
-{% endif %}#define {{ entry.name }} (({{ group.group_id }} << 16) | {{ entry.code }})
-{% endfor %}
-{% endfor %}
-
 /* --- Function pointer typedefs for {{ module.name }} --- */
 
-{% for fp in module.function_ptrs %}
+{% for fp in module.function_ptrs if not fp.omitted %}
+{% if fp.guard_directive %}
+{{ fp.guard_directive }}
+{% endif %}
 {{ render_funcptr(fp) }}
+{% if fp.guard_directive %}
+#endif
+{% endif %}
 
 {% endfor %}
 
 /* --- Functions for {{ module.name }} --- */
-{% set dep_enc = metadata.get('options', {}).get('c', {}).get('deprecated_encoding', 'guarded') %}
-{% for func_name, func in module.functions.items() %}
-{% if not func.static_inline and not (func.deprecated and dep_enc == 'none') %}
+{% for func_name, func in module.functions.items() if not func.omitted %}
+{% if not func.static_inline %}
 
-{% if func.deprecated %}
+{% if func.guard_directive %}
+{{ func.guard_directive }}
+{% endif %}
+{% if func.deprecated_gate %}
 #ifndef {{ c_opts.no_deprecated_guard }}
 {% endif %}
-  {%- if func.summary or func.description -%}
+  {%- if func.description -%}
 /*!
-    {% if func.summary %}
-{{ func.summary | c_lines(" * ") }}
-    {% endif %}
-    {% if func.description %}
-{% if func.summary %} *
-{% endif %}{{ func.description | c_lines(" * ") }}
-    {% endif %}
+{{ func.description | c_lines(" * ") }}
  *
     {% for param_name, param in func.parameters.items() %}
 {{ ("@param " ~ param_name ~ " " ~ (param.description or '')) | c_lines(" * ") }}
@@ -89,7 +95,7 @@
  * @return {{ func.return_c }}
  */
   {% endif %}
-{{ c_opts.api_macro }} {% if func.deprecated and dep_enc == 'strict' -%}{{ c_opts.deprecated_macro }} {% endif %}
+{{ c_opts.export_macro }} {% if func.deprecated and c_opts.emit_deprecated_attribute -%}{{ c_opts.deprecated_macro }} {% endif %}
 {{ func.return_c }} {{ func_name }}(
       {%- if func.parameters -%}
       {%- for name, param in func.parameters.items() -%}
@@ -97,7 +103,10 @@
       {%- endfor -%}
       {%- else -%}void{%- endif -%}
   );
-{% if func.deprecated %}
+{% if func.deprecated_gate %}
+#endif
+{% endif %}
+{% if func.guard_directive %}
 #endif
 {% endif %}
 {% endif %}
@@ -105,7 +114,13 @@
 
 /* --- Struct definitions for {{ module.name }} --- */
 
-{% for s in module.structs %}
+{% for s in module.structs if not s.omitted %}
+{% if s.guard_directive %}
+{{ s.guard_directive }}
+{% endif %}
 {{ render_struct_body(s) }}
+{% if s.guard_directive %}
+#endif
+{% endif %}
 
 {% endfor %}

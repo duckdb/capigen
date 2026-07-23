@@ -9,6 +9,11 @@ import pytest
 SCHEMA = json.loads(
     (Path(__file__).parent.parent / "src/capigen/schema/module.schema.json").read_text()
 )
+METADATA_SCHEMA = json.loads(
+    (
+        Path(__file__).parent.parent / "src/capigen/schema/metadata.schema.json"
+    ).read_text()
+)
 
 
 def _minimal_module(**overrides):
@@ -31,7 +36,7 @@ class TestPropertyNameValidation:
             ("constants", {"DUCKDB_MAX": {"value": 42}}),
             (
                 "functions",
-                {"duckdb_open": {"summary": "test"}},
+                {"duckdb_open": {"description": "test"}},
             ),
         ],
     )
@@ -50,7 +55,7 @@ class TestPropertyNameValidation:
             ("constants", {"DUCKDB_V2_MAX": {"value": 42}}),
             (
                 "functions",
-                {"duckdb_v2_open": {"summary": "test"}},
+                {"duckdb_v2_open": {"description": "test"}},
             ),
         ],
     )
@@ -72,6 +77,190 @@ class TestPropertyNameValidation:
         mod = _minimal_module(**{construct: entry})
         with pytest.raises(jsonschema.ValidationError, match="does not match"):
             jsonschema.validate(mod, SCHEMA)
+
+
+class TestStatusStateNames:
+    """The schema accepts any identifier as a state; validate.py checks the name."""
+
+    def test_custom_state_name_accepted(self):
+        mod = _minimal_module(
+            handles={"h": {"lifecycle": [["experimental", "v1.0.0", "2026-01-01"]]}}
+        )
+        jsonschema.validate(mod, SCHEMA)  # should not raise
+
+    def test_invalid_state_identifier_rejected(self):
+        mod = _minimal_module(
+            handles={"h": {"lifecycle": [["not a name", "v1.0.0", "2026-01-01"]]}}
+        )
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(mod, SCHEMA)
+
+
+class TestMetadataStates:
+    """The states block: mode is required; guard only for gated modes."""
+
+    def _metadata(self, states):
+        return {
+            "schema_version": "0.5",
+            "versions": ["v1.0.0"],
+            "suffixes": {"handles": "_h", "callbacks": "_cb", "aliases": "_t"},
+            "primitives": [{"name": "u32", "c_type": "uint32_t"}],
+            "lifecycle_states": states,
+        }
+
+    def test_valid_states_accepted(self):
+        states = {
+            "unstable": {"visibility": "opt_in", "guard": "API_UNSTABLE"},
+            "stable": {"visibility": "always"},
+            "deprecated": {"visibility": "opt_out", "guard": "API_NO_DEPRECATED"},
+            "removed": {"visibility": "never"},
+        }
+        jsonschema.validate(self._metadata(states), METADATA_SCHEMA)
+
+    def test_mode_required(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(self._metadata({"stable": {}}), METADATA_SCHEMA)
+
+    def test_unknown_mode_rejected(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(
+                self._metadata({"stable": {"visibility": "hidden"}}), METADATA_SCHEMA
+            )
+
+    def test_opt_in_requires_guard(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(
+                self._metadata({"unstable": {"visibility": "opt_in"}}), METADATA_SCHEMA
+            )
+
+    def test_opt_out_requires_guard(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(
+                self._metadata({"deprecated": {"visibility": "opt_out"}}),
+                METADATA_SCHEMA,
+            )
+
+    def test_visible_forbids_guard(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(
+                self._metadata({"stable": {"visibility": "always", "guard": "G"}}),
+                METADATA_SCHEMA,
+            )
+
+    def test_state_name_must_be_identifier(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(
+                self._metadata({"my-state": {"visibility": "always"}}), METADATA_SCHEMA
+            )
+
+    def test_omit_forbids_guard(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(
+                self._metadata({"removed": {"visibility": "never", "guard": "G"}}),
+                METADATA_SCHEMA,
+            )
+
+
+class TestAdapterOptionSchemas:
+    """Each adapter ships a strict schema for its options file."""
+
+    C = json.loads(
+        (
+            Path(__file__).parent.parent / "src/capigen/adapters/c/options.schema.json"
+        ).read_text()
+    )
+    BRIDGE = json.loads(
+        (
+            Path(__file__).parent.parent
+            / "src/capigen/adapters/bridge/options.schema.json"
+        ).read_text()
+    )
+    EXT = json.loads(
+        (
+            Path(__file__).parent.parent
+            / "src/capigen/adapters/extension_header/options.schema.json"
+        ).read_text()
+    )
+
+    def test_valid_c_options_accepted(self):
+        jsonschema.validate(
+            {
+                "comment_width": 120,
+                "export_macro": "LIB_C_API",
+                "emit_deprecated_attribute": True,
+                "banner": "// banner",
+                "handles": {
+                    "default_style": "tagged_struct",
+                    "override_style": {"task_state": "void_ptr"},
+                },
+                "emit_enum_max_member": False,
+            },
+            self.C,
+        )
+
+    def test_typo_in_c_options_rejected(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"comment_widht": 120}, self.C)
+
+    @pytest.mark.parametrize("dead", ["unstable_guard", "no_deprecated_guard"])
+    def test_dead_guard_token_options_rejected(self, dead):
+        """Guard tokens live on states; the old options are schema errors."""
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({dead: "SOME_TOKEN"}, self.C)
+
+    def test_deprecated_encoding_is_gone(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"deprecated_encoding": "none"}, self.C)
+
+    def test_bad_handle_style_rejected(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"handles": {"default_style": "fancy"}}, self.C)
+
+    def test_valid_bridge_options_accepted(self):
+        jsonschema.validate(
+            {"stub_return": "LIB_ERROR", "include_header": "internal.hpp"},
+            self.BRIDGE,
+        )
+
+    def test_extension_requires_its_fields(self):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"create_method": "CreateAPI"}, self.EXT)
+
+    def test_valid_extension_options_accepted(self):
+        jsonschema.validate(
+            {
+                "create_method": "CreateAPI",
+                "version_macro_prefix": "LIB_API_VERSION",
+                "internal_include": "lib.h",
+                "exclude_functions": ["skipme"],
+            },
+            self.EXT,
+        )
+
+    def test_metadata_rejects_an_options_block(self):
+        """metadata.yaml is pure spec; adapter options live in options/<adapter>.yaml."""
+        meta = {
+            "schema_version": "0.5",
+            "versions": ["v1.0.0"],
+            "suffixes": {"handles": "_h", "callbacks": "_cb", "aliases": "_t"},
+            "primitives": [{"name": "u32", "c_type": "uint32_t"}],
+            "options": {"c": {"comment_width": 120}},
+        }
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(meta, METADATA_SCHEMA)
+
+
+class TestSummaryRemoved:
+    """description is the only doc field; the old summary field is rejected."""
+
+    def test_summary_rejected(self):
+        mod = _minimal_module(functions={"duckdb_v2_open": {"summary": "gone"}})
+        with pytest.raises(jsonschema.ValidationError, match="summary"):
+            jsonschema.validate(mod, SCHEMA)
+
+    def test_function_without_doc_fields_accepted(self):
+        mod = _minimal_module(functions={"duckdb_v2_open": {}})
+        jsonschema.validate(mod, SCHEMA)  # should not raise
 
 
 class TestQualifiedAliases:
@@ -103,7 +292,6 @@ class TestParameterKind:
         return _minimal_module(
             functions={
                 "duckdb_v2_f": {
-                    "summary": "x",
                     "parameters": {
                         "p": {
                             "type": "char",
@@ -131,7 +319,6 @@ class TestParameterKind:
         mod = _minimal_module(
             functions={
                 "duckdb_v2_f": {
-                    "summary": "x",
                     "parameters": {"p": {"type": "char", "indirection": 1}},
                 }
             }

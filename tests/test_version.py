@@ -67,6 +67,110 @@ class TestCliVersionFlags:
         assert result.returncode == 0
         assert result.stdout.strip() == version("capigen")
 
+    def test_unresolvable_adapter_lists_builtins(self):
+        from pathlib import Path
+
+        spec = Path(__file__).parent / "testspec" / "v2"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "capigen",
+                "rust",
+                "--spec-dir",
+                str(spec),
+                "-o",
+                "x",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+        assert "cannot import adapter 'rust'" in result.stderr
+        assert "extension_header" in result.stderr  # the list names the built-ins
+
+    def test_mismatched_flag_errors_cleanly(self):
+        from pathlib import Path
+
+        spec = Path(__file__).parent / "testspec" / "v2"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "capigen",
+                "c",
+                "--spec-dir",
+                str(spec),
+                "--scan-dir",
+                "src",
+                "-o",
+                "x",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+        assert "does not accept 'scan_dir'" in result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_schema_violation_errors_cleanly(self, tmp_path):
+        (tmp_path / "metadata.yaml").write_text(
+            'schema_version: "0.5"\n'
+            'versions: ["v1.0.0"]\n'
+            "suffixes: {handles: _h, callbacks: _cb, aliases: _t}\n"
+            "primitives: [{name: i32, c_type: int32_t}]\n"
+            "not_a_field: true\n"
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "capigen",
+                "c",
+                "--spec-dir",
+                str(tmp_path),
+                "-o",
+                str(tmp_path / "out.h"),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+        assert "SCHEMA VALIDATION ERROR" in result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_external_adapter_module_runs(self, tmp_path):
+        """The CLI is a thin runner: any importable module with generate() works."""
+        from pathlib import Path
+        import os
+
+        (tmp_path / "myadapter.py").write_text(
+            "from pathlib import Path\n"
+            "def generate(modules, metadata, output_path):\n"
+            "    names = [f for m in modules for f in m.get('functions', {})]\n"
+            "    Path(output_path).write_text('\\n'.join(names))\n"
+        )
+        spec = Path(__file__).parent / "testspec" / "v2"
+        out = tmp_path / "out.txt"
+        env = dict(os.environ, PYTHONPATH=str(tmp_path))
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "capigen",
+                "myadapter",
+                "--spec-dir",
+                str(spec),
+                "-o",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "open" in out.read_text()
+
     def test_schema_version_flag(self):
         result = self._run("--schema-version")
         assert result.returncode == 0

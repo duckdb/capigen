@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:capigen:options:extension_header",
+  "description": "Extension function-pointer-struct adapter options.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "create_method",
+    "version_macro_prefix",
+    "internal_include"
+  ],
+  "properties": {
+    "create_method": {
+      "description": "Name of the engine-side function that fills the struct.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "version_macro_prefix": {
+      "description": "Prefix of the engine-side version define macros.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "internal_include": {
+      "description": "Header the engine-side output includes.",
+      "type": "string"
+    },
+    "exclude_functions": {
+      "description": "Spec functions kept out of the struct, by bare unprefixed name.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

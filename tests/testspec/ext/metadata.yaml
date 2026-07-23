@@ -1,6 +1,6 @@
-schema_version: "0.4"
+schema_version: "0.5"
 versions:
-  - "1.0.0"
+  - "v1.0.0"
 prefix: "ext_"
 suffixes:
   handles: ""
@@ -20,12 +20,6 @@ primitives:
   - name: idx
     c_type: idx_t
     underlying: uint64_t
-options:
-  extension:
-    unstable_guard: EXT_API_UNSTABLE
-    create_method: CreateExtAPI
-    api_version: "v1.0.0"
-    version_macro_prefix: EXT_API_VERSION
-    internal_include: ext.h
-    exclude:
-      - skipme
+lifecycle_states:
+  unstable: {visibility: opt_in, guard: EXT_API_UNSTABLE}
+  stable: {visibility: always}

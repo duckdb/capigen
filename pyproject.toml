@@ -1,7 +1,7 @@
 [project]
 name = "capigen"
-version = "0.4.0"
-description = "Declarative C ABI generator: define an API in YAML, validate it against a versioned schema, and generate the C header and bridge stubs."
+version = "0.5.0"
+description = "Declarative C ABI generator: define an API in YAML, validate it against a versioned schema, and run adapters that generate the C header, C++ bridge stubs, the extension header, and the Julia ccall layer."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }

@@ -1,7 +1,12 @@
-schema_version: "0.4"
+schema_version: "0.5"
 versions:
-  - "1.0.0"
+  - "v1.0.0"
 prefix: "duckdb_v2_"
+lifecycle_states:
+  unstable: {visibility: opt_in, guard: DUCKDB_V2_API_UNSTABLE}
+  stable: {visibility: always}
+  deprecated: {visibility: opt_out, guard: DUCKDB_V2_API_NO_DEPRECATED}
+  removed: {visibility: never}
 suffixes:
   handles: "_ptr"
   callbacks: "_cb"

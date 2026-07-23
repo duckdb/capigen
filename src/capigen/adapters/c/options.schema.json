@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:capigen:options:c",
+  "description": "C header adapter options.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "comment_width": {
+      "description": "Column budget deciding a one-line //! comment vs a /*! */ block.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "deprecated_macro": {
+      "description": "Attribute macro name used when emit_deprecated_attribute is on.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "emit_deprecated_attribute": {
+      "description": "Put the deprecated attribute macro on deprecated function declarations.",
+      "type": "boolean"
+    },
+    "typedef_guard_prefix": {
+      "description": "Prefix of the include-guard macros around qualified-alias typedefs.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "banner": {
+      "description": "Verbatim banner at the top of the generated header.",
+      "type": "string"
+    },
+    "handles": {
+      "description": "Handle rendering style. Changing a style is an ABI break.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_style": {
+          "type": "string",
+          "enum": [
+            "void_ptr",
+            "tagged_struct"
+          ]
+        },
+        "override_style": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "void_ptr",
+              "tagged_struct"
+            ]
+          }
+        }
+      }
+    },
+    "emit_enum_max_member": {
+      "description": "Append the int-max sentinel to every enum. Default true.",
+      "type": "boolean"
+    },
+    "emit_v1_primitive_defs": {
+      "description": "Emit the hand-rolled V1 preamble definitions.",
+      "type": "boolean"
+    },
+    "emit_arrow_defs": {
+      "description": "Emit the Arrow C Data Interface struct definitions in the preamble.",
+      "type": "boolean"
+    },
+    "emit_extension_api": {
+      "description": "Emit the duckdb_extension_access struct.",
+      "type": "boolean"
+    },
+    "export_macro": {
+      "description": "Export/visibility macro on every function declaration.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "extension_export_macro": {
+      "description": "Export macro for extension entrypoints.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    }
+  }
+}

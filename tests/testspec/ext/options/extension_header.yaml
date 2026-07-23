@@ -1,0 +1,5 @@
+create_method: CreateExtAPI
+version_macro_prefix: EXT_API_VERSION
+internal_include: ext.h
+exclude_functions:
+- skipme

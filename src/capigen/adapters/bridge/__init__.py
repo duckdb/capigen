@@ -7,7 +7,10 @@ then generates stubs only for the remainder. Re-running is safe and idempotent.
 import re
 from pathlib import Path
 
+from ...states import resolve_states
 from ..c.resolve import resolve_modules
+
+OPTIONS_SCHEMA = Path(__file__).parent / "options.schema.json"
 
 
 def _scan_implemented_functions(scan_dir: Path, prefix: str) -> set[str]:
@@ -34,14 +37,15 @@ def generate(
     output_path: Path,
     scan_dir: Path | None = None,
     invocation: str | None = None,
+    options: dict | None = None,
 ) -> None:
     """Generate C++ stub file for unimplemented V2 C API functions."""
     render_modules = resolve_modules(modules, metadata)
 
     prefix = metadata.get("prefix", "")
-    bridge_opts = metadata.get("options", {}).get("bridge", {})
-    stub_return = bridge_opts.get("stub_return", f"{prefix.upper()}API_ERROR")
-    include = bridge_opts.get("include")
+    options = options or {}
+    stub_return = options.get("stub_return")
+    include = options.get("include_header")
 
     implemented = _scan_implemented_functions(scan_dir, prefix) if scan_dir else set()
 
@@ -50,31 +54,43 @@ def generate(
     if invocation:
         lines.append(f"// Re-run: {invocation}")
     lines.append("")
+    # Engine side: implement the full surface, so opt in to every gated state.
+    opt_in_guards = sorted(
+        {s.guard for s in resolve_states(metadata).values() if s.visibility == "opt_in"}
+    )
+    for guard in opt_in_guards:
+        lines.append(f"#ifndef {guard}")
+        lines.append(f"#define {guard}")
+        lines.append("#endif")
+    if opt_in_guards:
+        lines.append("")
     if include:
         lines.append(f'#include "{include}"')
         lines.append("")
 
-    stub_count = 0
-    for mod in render_modules:
-        for fname, func in mod.functions.items():
-            if fname in implemented or func.static_inline:
-                continue
+    to_stub = [
+        (fname, func)
+        for mod in render_modules
+        for fname, func in mod.functions.items()
+        if fname not in implemented and not func.static_inline and not func.omitted
+    ]
+    # No universal error value exists across specs, so the return expression
+    # must be configured whenever there is anything to stub.
+    if to_stub and not stub_return:
+        raise ValueError("bridge requires 'stub_return' when stubs are generated")
 
-            # Build parameter list
-            params = []
-            for pname, param in func.parameters.items():
-                params.append(f"{param.c_decl} {pname}")
-            param_str = ", ".join(params) if params else "void"
+    for fname, func in to_stub:
+        params = [f"{param.c_decl} {pname}" for pname, param in func.parameters.items()]
+        param_str = ", ".join(params) if params else "void"
 
-            lines.append(f"{func.return_c} {fname}({param_str}) {{")
-            lines.append(f"\treturn {stub_return}; // Not yet implemented")
-            lines.append("}")
-            lines.append("")
-            stub_count += 1
+        lines.append(f"{func.return_c} {fname}({param_str}) {{")
+        lines.append(f"\treturn {stub_return}; // Not yet implemented")
+        lines.append("}")
+        lines.append("")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines))
     print(
-        f"Generated {output_path} ({stub_count} stubs, "
+        f"Generated {output_path} ({len(to_stub)} stubs, "
         f"{len(implemented)} already implemented)"
     )

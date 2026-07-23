@@ -35,13 +35,13 @@
 {%- endmacro -%}
 
 {%- macro render_struct_fwd(s) -%}
-  {%- if s.description %}{{ s.description | c_doc }}
-{% endif -%}
-typedef struct {{ s.template_alias }} {{ "*" if s.pointer_alias else "" }}{{ s.template_alias }};
+typedef struct {{ s.name }} {{ "*" if s.pointer_alias else "" }}{{ s.template_alias }};
 {%- endmacro %}
 
 {%- macro render_struct_body(s) -%}
-struct {{ s.template_alias }} {
+  {%- if s.description %}{{ s.description | c_doc }}
+{% endif -%}
+struct {{ s.name }} {
 {% for f in s.fields -%}
 {{ render_field(f, "  ", loop.first) }}
 {% endfor -%}
