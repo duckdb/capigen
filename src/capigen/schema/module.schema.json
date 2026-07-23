@@ -83,14 +83,6 @@
         "$ref": "#/$defs/ConstantDefinition"
       }
     },
-    "error_groups": {
-      "description": "Grouped error code definitions, keyed by category name.",
-      "type": "object",
-      "default": {},
-      "additionalProperties": {
-        "$ref": "#/$defs/ErrorGroup"
-      }
-    },
     "functions": {
       "description": "Function definitions, keyed by C function name.",
       "type": "object",
@@ -212,7 +204,7 @@
       }
     },
     "Function": {
-      "description": "A C API function. Every function returns an error code by default and takes typed parameters.",
+      "description": "A C API function with typed parameters.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -590,50 +582,6 @@
               "type": "string"
             }
           ]
-        },
-        "description": {
-          "type": "string",
-          "default": ""
-        }
-      }
-    },
-    "ErrorGroup": {
-      "description": "A group of related error codes. The full 32-bit code is (group_id << 16) | code.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "group_id",
-        "entries"
-      ],
-      "properties": {
-        "group_id": {
-          "description": "Group identifier (upper 16 bits of the error code).",
-          "type": "integer"
-        },
-        "description": {
-          "type": "string",
-          "default": ""
-        },
-        "entries": {
-          "description": "Error entries within this group, keyed by error code name.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/ErrorEntry"
-          }
-        }
-      }
-    },
-    "ErrorEntry": {
-      "description": "A single error code within an error group.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "code"
-      ],
-      "properties": {
-        "code": {
-          "description": "Error code identifier (lower 16 bits of the error code).",
-          "type": "integer"
         },
         "description": {
           "type": "string",

@@ -85,7 +85,6 @@ def _run_inline(tmp_path, functions, template_text, exclude=None):
         "structs": {},
         "enums": {},
         "constants": {},
-        "error_groups": {},
         "functions": functions,
     }
     tmp_path.mkdir(parents=True, exist_ok=True)

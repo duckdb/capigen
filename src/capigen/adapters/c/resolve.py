@@ -9,8 +9,6 @@ from .render import (
     CConstant,
     CEnum,
     CEnumValue,
-    CErrorEntry,
-    CErrorGroup,
     CField,
     CFuncPtr,
     CFuncPtrParam,
@@ -194,10 +192,6 @@ def _resolve_module(
                 description=c.get("description", ""),
             )
             for name, c in mod.get("constants", {}).items()
-        ],
-        error_groups=[
-            _resolve_error_group(category, g, prefix)
-            for category, g in mod.get("error_groups", {}).items()
         ],
         function_ptrs=[
             _resolve_callback(name, cb, registry, primitives, suffixes, states, prefix)
@@ -479,21 +473,4 @@ def _resolve_enum(
         values=resolved_values,
         omitted=omitted,
         guard_directive=guard_directive,
-    )
-
-
-def _resolve_error_group(category: str, group: dict, prefix: str = "") -> CErrorGroup:
-    uprefix = prefix.upper()
-    return CErrorGroup(
-        category=category,
-        group_id=group["group_id"],
-        description=group.get("description", ""),
-        entries=[
-            CErrorEntry(
-                name=f"{uprefix}{ename}",
-                code=e["code"],
-                description=e.get("description", ""),
-            )
-            for ename, e in group["entries"].items()
-        ],
     )

@@ -32,8 +32,9 @@ def _metadata(**bridge_opts):
             {"name": "i32", "c_type": "int32_t"},
         ],
     }
-    if bridge_opts:
-        meta["options"] = {"bridge": bridge_opts}
+    opts = {"stub_return": "DUCKDB_V2_ERROR_API"}
+    opts.update(bridge_opts)
+    meta["options"] = {"bridge": opts}
     return meta
 
 
@@ -46,7 +47,6 @@ def _module():
         "structs": {},
         "enums": {},
         "constants": {},
-        "error_groups": {},
         "functions": {
             "ping": {
                 "return_type": "i32",
@@ -64,10 +64,23 @@ def test_zero_param_stub_renders_void(tmp_path):
     assert "duckdb_v2_ping(void)" in output.read_text()
 
 
-def test_stub_return_defaults_from_prefix(tmp_path):
+def test_missing_stub_return_errors_when_stubbing(tmp_path):
+    """No universal error value exists; the expression must be configured."""
+    meta = _metadata()
+    del meta["options"]["bridge"]["stub_return"]
+    with pytest.raises(ValueError, match="options.bridge.stub_return"):
+        generate([_module()], meta, tmp_path / "stubs.cpp")
+
+
+def test_missing_stub_return_ok_when_nothing_to_stub(tmp_path):
+    scan_dir = tmp_path / "scan"
+    scan_dir.mkdir()
+    (scan_dir / "impl.cpp").write_text("int32_t duckdb_v2_ping(void) { return 0; }\n")
+    meta = _metadata()
+    del meta["options"]["bridge"]["stub_return"]
     output = tmp_path / "stubs.cpp"
-    generate([_module()], _metadata(), output)
-    assert "return DUCKDB_V2_API_ERROR;" in output.read_text()
+    generate([_module()], meta, output, scan_dir=scan_dir)
+    assert "// Not yet implemented" not in output.read_text()
 
 
 def test_stub_return_override(tmp_path):
@@ -151,7 +164,10 @@ def test_stubs_compile_against_generated_header(tmp_path):
     """One generator run's artifacts are consistent: stubs see the guarded declarations."""
     metadata = load_metadata(TESTSPEC_DIR)
     modules = load_modules(TESTSPEC_DIR)
-    metadata.setdefault("options", {})["bridge"] = {"include_header": "duckdb_v2.h"}
+    metadata.setdefault("options", {})["bridge"] = {
+        "include_header": "duckdb_v2.h",
+        "stub_return": "DUCKDB_V2_API_ERROR",
+    }
 
     generate_header(modules, metadata, tmp_path / "duckdb_v2.h")
     stubs = tmp_path / "stubs.cpp"

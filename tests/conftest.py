@@ -13,7 +13,6 @@ def _make_module(name, **overrides):
         "structs": {},
         "enums": {},
         "constants": {},
-        "error_groups": {},
         "functions": {},
     }
     mod.update(overrides)

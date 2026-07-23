@@ -15,8 +15,6 @@ from capigen.adapters.c.render import (
     CConstant,
     CEnum,
     CEnumValue,
-    CErrorEntry,
-    CErrorGroup,
     CField,
     CFuncPtr,
     CFuncPtrParam,
@@ -712,35 +710,6 @@ class TestResolveConstants:
         assert result[0].constants[0].description == "the answer"
 
 
-class TestResolveErrorGroups:
-    def test_error_group(self, metadata, make_module):
-        modules = [
-            make_module(
-                "m",
-                error_groups={
-                    "IO": {
-                        "group_id": 1,
-                        "description": "I/O errors",
-                        "entries": {
-                            "FILE_NOT_FOUND": {"code": 1},
-                            "PERMISSION_DENIED": {"code": 2},
-                        },
-                    },
-                },
-            )
-        ]
-        result = resolve_modules(modules, metadata)
-        g = result[0].error_groups[0]
-        assert isinstance(g, CErrorGroup)
-        assert g.category == "IO"
-        assert g.group_id == 1
-        assert g.description == "I/O errors"
-        assert len(g.entries) == 2
-        assert isinstance(g.entries[0], CErrorEntry)
-        assert g.entries[0].name == "FILE_NOT_FOUND"
-        assert g.entries[0].code == 1
-
-
 class TestResolveModule:
     def test_returns_cmodule(self, metadata, make_module):
         modules = [make_module("test_mod")]
@@ -783,7 +752,6 @@ class TestResolveModule:
         assert m.structs == []
         assert m.enums == []
         assert m.constants == []
-        assert m.error_groups == []
         assert m.function_ptrs == []
         assert m.functions == {}
 

@@ -152,7 +152,7 @@ Casing rules (`_apply_prefix` in `adapters/c/resolve.py`):
   bare name starts with a lowercase letter, and uppercased if it starts with an uppercase
   letter. So `connection` becomes `lib_connection_handle`, while `API_CALL` becomes
   `LIB_API_CALL_t`.
-- For enums, constants, error groups, enum members, and error entries, the prefix is
+- For enums, constants, and enum members, the prefix is
   always uppercased. These are macro and member names by convention.
 
 Setting `prefix: ""` (or omitting it) disables prefixing. Declared names become the C

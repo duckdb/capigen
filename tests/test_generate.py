@@ -99,7 +99,6 @@ class TestInlineArrayStructRendering:
             },
             "enums": {},
             "constants": {},
-            "error_groups": {},
             "functions": {},
         }
 
@@ -170,7 +169,6 @@ class TestUnionStructRendering:
             },
             "enums": {},
             "constants": {},
-            "error_groups": {},
             "functions": {},
         }
 
@@ -254,7 +252,6 @@ class TestDescriptionRendering:
             "structs": {},
             "enums": {},
             "constants": {},
-            "error_groups": {},
             "functions": {"ping": func},
         }
 
@@ -350,7 +347,6 @@ class TestMacroOptions:
             "structs": {},
             "enums": {},
             "constants": {},
-            "error_groups": {},
             "functions": {
                 "ping": {
                     "return_type": "i32",
@@ -433,7 +429,6 @@ class TestUnstableGating:
             "structs": {},
             "enums": {},
             "constants": {},
-            "error_groups": {},
             "functions": {},
         }
         mod.update(overrides)

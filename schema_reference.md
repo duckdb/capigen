@@ -170,7 +170,6 @@ aliases: {}
 structs: {}
 enums: {}
 constants: {}
-error_groups: {}
 functions: {}
 ```
 
@@ -347,38 +346,6 @@ constants:
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `value` | yes | none | Integer or string expression. |
-
-Plus `description`. No `lifecycle`.
-
----
-
-## error_groups
-
-Hierarchical error codes. The full 32-bit value is `(group_id << 16) | code`.
-
-```yaml
-error_groups:
-  IO:
-    group_id: 0x0001
-    description: Input/output errors.
-    entries:
-      ERROR_IO_FILE_NOT_FOUND:
-        code: 0x0001
-        description: File not found.
-```
-
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `group_id` | yes | none | Upper 16 bits of the error code. |
-| `entries` | yes | none | Map of error name to entry. |
-
-Plus `description`. No `lifecycle`.
-
-### Error entry
-
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `code` | yes | none | Lower 16 bits of the error code. |
 
 Plus `description`. No `lifecycle`.
 

@@ -118,27 +118,11 @@ class CConstant:
 
 
 @dataclass
-class CErrorEntry:
-    name: str
-    code: int
-    description: str = ""
-
-
-@dataclass
-class CErrorGroup:
-    category: str
-    group_id: int
-    description: str
-    entries: list[CErrorEntry]
-
-
-@dataclass
 class CModule:
     name: str
     types: list[CTypeDef]
     structs: list[CStruct]
     enums: list[CEnum]
     constants: list[CConstant]
-    error_groups: list[CErrorGroup]
     function_ptrs: list[CFuncPtr]
     functions: dict[str, CFunction]
