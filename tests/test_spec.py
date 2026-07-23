@@ -45,6 +45,13 @@ class TestLoad:
             capigen.load(tmp_path)
         assert len(exc.value.errors) == 1
 
+    def test_latest_version_guards_empty_versions(self):
+        spec = capigen.Spec(
+            metadata={"versions": [], "suffixes": {}, "primitives": []}, modules=[]
+        )
+        with pytest.raises(ValueError, match="'versions' list is empty"):
+            _ = spec.latest_version
+
     def test_empty_versions_rejected_by_schema(self, tmp_path):
         import jsonschema
 

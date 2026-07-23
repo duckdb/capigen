@@ -89,6 +89,56 @@ class TestCliVersionFlags:
         assert "cannot import adapter 'rust'" in result.stderr
         assert "extension_header" in result.stderr  # the list names the built-ins
 
+    def test_mismatched_flag_errors_cleanly(self):
+        from pathlib import Path
+
+        spec = Path(__file__).parent / "testspec" / "v2"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "capigen",
+                "c",
+                "--spec-dir",
+                str(spec),
+                "--scan-dir",
+                "src",
+                "-o",
+                "x",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+        assert "does not accept 'scan_dir'" in result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_schema_violation_errors_cleanly(self, tmp_path):
+        (tmp_path / "metadata.yaml").write_text(
+            'schema_version: "0.5"\n'
+            'versions: ["v1.0.0"]\n'
+            "suffixes: {handles: _h, callbacks: _cb, aliases: _t}\n"
+            "primitives: [{name: i32, c_type: int32_t}]\n"
+            "not_a_field: true\n"
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "capigen",
+                "c",
+                "--spec-dir",
+                str(tmp_path),
+                "-o",
+                str(tmp_path / "out.h"),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+        assert "SCHEMA VALIDATION ERROR" in result.stderr
+        assert "Traceback" not in result.stderr
+
     def test_external_adapter_module_runs(self, tmp_path):
         """The CLI is a thin runner: any importable module with generate() works."""
         from pathlib import Path

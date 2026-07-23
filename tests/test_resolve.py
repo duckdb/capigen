@@ -7,6 +7,7 @@ so they remain valid after the spec moves to duckdb core.
 import pytest
 
 from capigen.adapters.c.resolve import (
+    add_enum_sentinels,
     resolve_c_options,
     resolve_modules,
     _format_c_type,
@@ -998,59 +999,61 @@ class TestStateGating:
 
 
 class TestEnumMaxSentinel:
-    """Every generated enum ends with an int-max member that pins its width."""
+    """The C adapter appends an int-max member that pins each enum's width."""
+
+    def _enum(self, metadata, make_module, enums, sentinels=True):
+        modules = [make_module("m", enums=enums)]
+        render = resolve_modules(modules, metadata)
+        if sentinels:
+            add_enum_sentinels(render)
+        return render[0].enums[0]
+
+    def test_resolve_is_sentinel_free(self, metadata, make_module):
+        """Shared resolution never adds sentinels; only the C post-step does."""
+        e = self._enum(
+            metadata, make_module, {"MODE": {"values": {"A": {}}}}, sentinels=False
+        )
+        assert list(e.values) == ["A"]
 
     def test_sentinel_is_last_with_int_max_value(self, metadata, make_module):
-        modules = [make_module("m", enums={"MODE": {"values": {"A": {}, "B": {}}}})]
-        e = resolve_modules(modules, metadata)[0].enums[0]
+        e = self._enum(metadata, make_module, {"MODE": {"values": {"A": {}, "B": {}}}})
         assert list(e.values) == ["A", "B", "MODE_MAX_ENUM"]
         assert e.values["MODE_MAX_ENUM"].value == "0x7FFFFFFF"
 
     def test_sentinel_does_not_disturb_auto_numbering(self, metadata, make_module):
-        modules = [make_module("m", enums={"MODE": {"values": {"A": {}, "B": {}}}})]
-        e = resolve_modules(modules, metadata)[0].enums[0]
+        e = self._enum(metadata, make_module, {"MODE": {"values": {"A": {}, "B": {}}}})
         assert e.values["A"].value == 0
         assert e.values["B"].value == 1
 
     def test_sentinel_name_uses_prefixed_enum_name(self, metadata, make_module):
         metadata["prefix"] = "duckdb_v2_"
-        modules = [make_module("m", enums={"MODE": {"values": {"A": {}}}})]
-        e = resolve_modules(modules, metadata)[0].enums[0]
+        e = self._enum(metadata, make_module, {"MODE": {"values": {"A": {}}}})
         assert "DUCKDB_V2_MODE_MAX_ENUM" in e.values
 
     def test_sentinel_of_lowercase_enum_is_macro_case(self, metadata, make_module):
         metadata["prefix"] = "lib_"
-        modules = [make_module("m", enums={"mode": {"values": {"A": {}}}})]
-        e = resolve_modules(modules, metadata)[0].enums[0]
+        e = self._enum(metadata, make_module, {"mode": {"values": {"A": {}}}})
         assert "LIB_MODE_MAX_ENUM" in e.values
-
-    def test_sentinel_disabled_by_option(self, metadata, make_module):
-        modules = [make_module("m", enums={"MODE": {"values": {"A": {}}}})]
-        e = resolve_modules(modules, metadata, {"emit_enum_max_member": False})[
-            0
-        ].enums[0]
-        assert list(e.values) == ["A"]
 
     def test_omitted_enum_gets_no_sentinel_and_no_collision_error(
         self, metadata, make_module
     ):
         """A removed enum is never rendered, so a sentinel-like member is fine."""
-        modules = [
-            make_module(
-                "m",
-                enums={
-                    "MODE": {
-                        "values": {"MODE_MAX_ENUM": {}},
-                        "lifecycle": [["removed", "v1.0.0", "2026-01-01"]],
-                    }
-                },
-            )
-        ]
-        e = resolve_modules(modules, metadata)[0].enums[0]
+        e = self._enum(
+            metadata,
+            make_module,
+            {
+                "MODE": {
+                    "values": {"MODE_MAX_ENUM": {}},
+                    "lifecycle": [["removed", "v1.0.0", "2026-01-01"]],
+                }
+            },
+        )
         assert e.omitted is True
         assert list(e.values) == ["MODE_MAX_ENUM"]
 
     def test_colliding_member_name_raises(self, metadata, make_module):
-        modules = [make_module("m", enums={"MODE": {"values": {"MODE_MAX_ENUM": {}}}})]
-        with pytest.raises(ValueError, match="collides with the"):
-            resolve_modules(modules, metadata)
+        with pytest.raises(ValueError, match="collides with"):
+            self._enum(
+                metadata, make_module, {"MODE": {"values": {"MODE_MAX_ENUM": {}}}}
+            )

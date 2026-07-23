@@ -6,6 +6,8 @@ import inspect
 import sys
 from pathlib import Path
 
+import jsonschema
+
 from . import SCHEMA_VERSION, __version__
 from .loader import SchemaVersionError, load_options
 from .spec import SpecError, load
@@ -65,6 +67,10 @@ def main() -> None:
     except SchemaVersionError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+    except jsonschema.ValidationError as e:
+        print(f"\n--- SCHEMA VALIDATION ERROR ---\n{e.message}", file=sys.stderr)
+        print("\nGeneration aborted.", file=sys.stderr)
+        sys.exit(1)
     except SpecError as e:
         print("\n--- SEMANTIC VALIDATION ERRORS ---", file=sys.stderr)
         print(e, file=sys.stderr)
@@ -120,23 +126,42 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-        options = load_options(options_path, schema_path)
+        try:
+            options = load_options(options_path, schema_path)
+        except jsonschema.ValidationError as e:
+            print(
+                f"\n--- SCHEMA VALIDATION ERROR in {options_path} ---\n{e.message}",
+                file=sys.stderr,
+            )
+            print("\nGeneration aborted.", file=sys.stderr)
+            sys.exit(1)
 
     output_path = Path(args.output)
     params = inspect.signature(adapter.generate).parameters
+    # Anything the user supplied must be accepted by the adapter; a mismatch
+    # is an error, never a silent drop.
+    passthrough = {
+        "options": options,
+        "scan_dir": Path(args.scan_dir) if args.scan_dir is not None else None,
+        "template": Path(args.template) if args.template is not None else None,
+        "internal_out": (
+            Path(args.internal_out) if args.internal_out is not None else None
+        ),
+    }
     extra_kwargs: dict = {}
-    if options is not None and "options" in params:
-        extra_kwargs["options"] = options
-    modules, metadata = spec.modules, spec.metadata
-    if args.scan_dir is not None:
-        extra_kwargs["scan_dir"] = Path(args.scan_dir)
-    if args.template is not None and "template" in params:
-        extra_kwargs["template"] = Path(args.template)
-    if args.internal_out is not None and "internal_out" in params:
-        extra_kwargs["internal_out"] = Path(args.internal_out)
+    for name, value in passthrough.items():
+        if value is None:
+            continue
+        if name not in params:
+            print(
+                f"Error: adapter '{args.adapter}' does not accept '{name}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        extra_kwargs[name] = value
     if "invocation" in params:
         extra_kwargs["invocation"] = "capigen " + " ".join(sys.argv[1:])
-    adapter.generate(modules, metadata, output_path, **extra_kwargs)
+    adapter.generate(spec.modules, spec.metadata, output_path, **extra_kwargs)
 
 
 if __name__ == "__main__":

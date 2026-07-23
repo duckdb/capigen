@@ -1,9 +1,10 @@
 """One-call loading of a validated spec.
 
-`capigen.load(spec_dir)` is the front door for anything that consumes a spec:
-the CLI, the in-tree adapters, and out-of-tree binding generators. It loads,
-applies schema defaults, and runs cross-module validation in one step, so a
-consumer cannot forget the validation and generate from a broken spec.
+`capigen.load(spec_dir)` is the front door for spec consumers: the CLI and
+out-of-tree binding generators. It loads, applies schema defaults, and runs
+cross-module validation in one step, so a consumer cannot forget the
+validation and generate from a broken spec. The in-tree adapters receive its
+unpacked dicts from the CLI.
 """
 
 from dataclasses import dataclass
@@ -26,7 +27,11 @@ class SpecError(Exception):
 
 @dataclass
 class Spec:
-    """A loaded, validated API spec, with the common derived views precomputed."""
+    """A loaded, validated API spec, with the common derived views precomputed.
+
+    Treat `metadata` and `modules` as read-only: the derived views are cached
+    on first access and do not track later mutations.
+    """
 
     metadata: dict
     modules: list[dict]
@@ -54,6 +59,8 @@ class Spec:
     @cached_property
     def latest_version(self) -> str:
         """The spec describes the API as of this version (numeric max of versions)."""
+        if not self.versions:
+            raise ValueError("the spec's 'versions' list is empty")
         return max(self.versions, key=version_key)
 
     @cached_property

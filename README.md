@@ -24,7 +24,7 @@ uv run capigen c --spec-dir /path/to/api_spec -o header.h
 Adapter options live in `<spec-dir>/options/<adapter>.yaml` (override with
 `--options PATH`) and are validated against the adapter's own schema before
 generation. The adapter name resolves as a built-in under `capigen.adapters` first,
-then as any importable module exposing `generate()` — the CLI is a thin runner
+then as any importable module exposing `generate()`. The CLI is a thin runner
 (load, validate, dispatch), so an out-of-tree generator can use it instead of
 writing its own entry point.
 

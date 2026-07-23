@@ -54,15 +54,21 @@ def _default_banner(prefix: str) -> str:
     )
 
 
-def resolve_c_options(metadata: dict, options: dict | None = None) -> dict:
+def resolve_c_options(
+    metadata: dict,
+    options: dict | None = None,
+    states: dict[str, State] | None = None,
+) -> dict:
     """Resolve C-adapter macro names, banner, and the comment column budget."""
     prefix = metadata.get("prefix", "")
     uprefix = prefix.upper()
     c = options or {}
+    if states is None:
+        states = resolve_states(metadata)
     # The legacy `deprecated` field gates with the deprecated state's token.
     # Without an opt_out deprecated state the gate never fires and the token
     # stays empty.
-    dep = resolve_states(metadata).get("deprecated")
+    dep = states.get("deprecated")
     dep_guard = dep.guard if dep and dep.visibility == "opt_out" else ""
     return {
         # Only decides `//!` line vs `/*! ... */` block; wrapping is the formatter's.
@@ -83,17 +89,22 @@ def resolve_c_options(metadata: dict, options: dict | None = None) -> dict:
 
 
 def resolve_modules(
-    modules: list[dict], metadata: dict, options: dict | None = None
+    modules: list[dict],
+    metadata: dict,
+    options: dict | None = None,
+    states: dict[str, State] | None = None,
 ) -> list[CModule]:
     """Transform validated API spec dicts into typed C render objects.
 
     `options` is the C adapter's options dict; other adapters that only need
-    the function view may omit it.
+    the function view may omit it. Pass `states` to reuse an already resolved
+    vocabulary.
     """
     primitives = {p["name"]: p["c_type"] for p in metadata["primitives"]}
     suffixes = metadata["suffixes"]
     prefix = metadata.get("prefix", "")
-    states = resolve_states(metadata)
+    if states is None:
+        states = resolve_states(metadata)
     c_options = options or {}
     handle_opts = c_options.get("handles", {})
     handle_style = handle_opts.get("default_style", "void_ptr")
@@ -102,7 +113,6 @@ def resolve_modules(
         for name, style in handle_opts.get("override_style", {}).items()
         if style == "void_ptr"
     )
-    emit_max_member = c_options.get("emit_enum_max_member", True)
     registry = _build_registry(modules, suffixes, prefix)
     return [
         _resolve_module(
@@ -114,7 +124,6 @@ def resolve_modules(
             prefix,
             handle_style,
             void_ptr_handles,
-            emit_max_member,
         )
         for mod in modules
     ]
@@ -164,7 +173,6 @@ def _resolve_module(
     prefix: str = "",
     handle_style: str = "void_ptr",
     void_ptr_handles: frozenset[str] = frozenset(),
-    emit_max_member: bool = True,
 ) -> CModule:
     uprefix = prefix.upper()
     return CModule(
@@ -191,7 +199,7 @@ def _resolve_module(
             for name, s in mod.get("structs", {}).items()
         ],
         enums=[
-            _resolve_enum(name, e, states, prefix, emit_max_member)
+            _resolve_enum(name, e, states, prefix)
             for name, e in mod.get("enums", {}).items()
         ],
         constants=[
@@ -450,9 +458,8 @@ def _resolve_enum(
     enum: dict,
     states: dict[str, State],
     prefix: str = "",
-    emit_max_member: bool = True,
 ) -> CEnum:
-    """Auto-number enum values (via the shared helper) and append the sentinel."""
+    """Auto-number enum values via the shared helper."""
     uprefix = prefix.upper()
     c_name = _apply_prefix(prefix, name)
     resolved_values = {
@@ -464,18 +471,6 @@ def _resolve_enum(
     }
 
     omitted, guard_directive = _gating(enum, states)
-
-    # An int-max member pins the underlying type to at least 32 bits, so the
-    # ABI stops depending on compiler flags like -fshort-enums. An omitted
-    # enum is never rendered, so it gets no sentinel and no collision check.
-    if emit_max_member and not omitted:
-        sentinel = f"{uprefix}{name.upper()}_MAX_ENUM"
-        if sentinel in resolved_values:
-            raise ValueError(
-                f"Enum '{name}': member '{sentinel}' collides with the "
-                "generated max-value sentinel"
-            )
-        resolved_values[sentinel] = CEnumValue(value="0x7FFFFFFF")
     return CEnum(
         name=c_name,
         description=enum.get("description", ""),
@@ -483,3 +478,24 @@ def _resolve_enum(
         omitted=omitted,
         guard_directive=guard_directive,
     )
+
+
+def add_enum_sentinels(render_modules: list[CModule]) -> None:
+    """Append the int-max sentinel to every emitted enum.
+
+    The sentinel pins the underlying type to at least 32 bits, so the ABI
+    stops depending on compiler flags like -fshort-enums. This is C-header
+    policy: only the C adapter applies it, so the other adapters never see
+    sentinel members or the collision check.
+    """
+    for mod in render_modules:
+        for enum in mod.enums:
+            if enum.omitted:
+                continue
+            sentinel = f"{enum.name.upper()}_MAX_ENUM"
+            if sentinel in enum.values:
+                raise ValueError(
+                    f"Enum '{enum.name}': member '{sentinel}' collides with "
+                    "the generated max-value sentinel"
+                )
+            enum.values[sentinel] = CEnumValue(value="0x7FFFFFFF")

@@ -166,6 +166,15 @@ def test_opt_out_guards_not_defined(tmp_path):
     assert "DUCKDB_V2_API_NO_DEPRECATED" not in output.read_text()
 
 
+def test_survives_sentinel_named_enum_member(tmp_path):
+    """Bridge never applies sentinels, so a MAX_ENUM-named member is fine here."""
+    module = _module()
+    module["enums"] = {"MODE": {"values": {"MODE_MAX_ENUM": {"value": 0}}}}
+    output = tmp_path / "stubs.cpp"
+    generate([module], _metadata(), output, options=_options())
+    assert "duckdb_v2_ping" in output.read_text()
+
+
 def test_omitted_function_gets_no_stub(tmp_path):
     module = _module()
     module["functions"]["ping"]["lifecycle"] = [["removed", "v1.0.0", "2026-01-01"]]

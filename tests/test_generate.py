@@ -671,6 +671,13 @@ class TestUnstableGating:
         gated = gated.split("#endif", 1)[0]
         assert "DUCKDB_V2_DEPRECATED" in gated
 
+    def test_enum_max_sentinel_disabled_by_option(self, tmp_path):
+        module = self._module(enums={"MODE": {"values": {"MODE_A": {"value": 0}}}})
+        content = self._generate(
+            module, self._metadata(), tmp_path, options={"emit_enum_max_member": False}
+        )
+        assert "MAX_ENUM" not in content
+
     def test_enum_max_sentinel_rendered(self, tmp_path):
         module = self._module(enums={"MODE": {"values": {"MODE_A": {"value": 0}}}})
         content = self._generate(module, self._metadata(), tmp_path)

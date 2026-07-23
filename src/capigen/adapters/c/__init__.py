@@ -4,8 +4,9 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from ...states import resolve_states
 from .comments import doc, prefixed
-from .resolve import resolve_c_options, resolve_modules
+from .resolve import add_enum_sentinels, resolve_c_options, resolve_modules
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 OPTIONS_SCHEMA = Path(__file__).parent / "options.schema.json"
@@ -18,8 +19,11 @@ def generate(
     options: dict | None = None,
 ) -> None:
     options = options or {}
-    render_modules = resolve_modules(modules, metadata, options)
-    c_opts = resolve_c_options(metadata, options)
+    states = resolve_states(metadata)
+    render_modules = resolve_modules(modules, metadata, options, states)
+    c_opts = resolve_c_options(metadata, options, states)
+    if options.get("emit_enum_max_member", True):
+        add_enum_sentinels(render_modules)
     width = int(c_opts["comment_width"])
 
     def _c_doc(description: str, indent: str = "") -> str:
