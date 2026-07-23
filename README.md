@@ -8,7 +8,7 @@ There are three distinct things in play:
 
 - **The IDL schema** (`src/capigen/schema/`) JSON Schema files defining a valid API spec. It defines constructs (types, functions, enums, ...), their fields, and their allowed values. See [schema_reference.md](schema_reference.md) for the complete reference, including how spec authors wire it into their editor for inline validation ([Editor autocomplete](schema_reference.md#editor-autocomplete)).
 - **capigen** (`src/capigen/`) validates a spec against the schema and can dispatch to a pluggable adapter for code generation.
-- **Adapters** (`src/capigen/adapters/`) are pluggable code generators. capigen ships the `c` adapter (produces the C header), the `bridge` adapter (produces C++ stub skeletons for unimplemented functions), and the `extension_header` adapter (produces a versioned function-pointer-struct extension header). Additional adapters can be supplied as external Python modules.
+- **Adapters** (`src/capigen/adapters/`) are the code generators. capigen ships the `c` adapter (the C header), the `bridge` adapter (C++ stub skeletons for unimplemented functions), and the `extension_header` adapter (a versioned function-pointer-struct extension header). These are in-tree and versioned with the schema, because their output defines the contract.
 
 The schema, capigen, and the adapters are versioned together. A schema change (new construct, new field) requires updating capigen and its adapters. An API spec is independent, adding a function only changes that consumer's YAML.
 
@@ -20,15 +20,9 @@ Using the `c` adapter:
 uv run capigen c --spec-dir /path/to/api_spec -o header.h
 ```
 
-`--spec-dir` points at a directory containing `metadata.yaml` and the module YAMLs. To
-use an external adapter, pass its import path:
-
-```bash
-uv run capigen my_package.my_adapter --spec-dir /path/to/api_spec -o output.rs
-```
-
-The adapter name resolves as a built-in (`capigen.adapters.<name>`) first, then as a
-full module path.
+`--spec-dir` points at a directory containing `metadata.yaml` and the module YAMLs.
+The adapter name resolves under `capigen.adapters`; an unknown name lists the
+available adapters.
 
 ```bash
 uv run capigen --version           # package version (e.g. 0.5.0)
@@ -43,7 +37,8 @@ src/capigen/
   __main__.py          # CLI entry point
   loader.py            # YAML loading, JSON Schema validation, schema_version check
   validate.py          # cross-module referential integrity checks
-  tools.py             # module dependency ordering
+  states.py            # lifecycle state vocabulary
+  tools.py             # shared spec utilities (ordering, enum numbering, versions)
   schema/              # the IDL schema (JSON Schema), versioned with capigen
     metadata.schema.json
     module.schema.json
@@ -63,6 +58,31 @@ schema_reference.md    # module-schema reference
 4. **Adapter** resolves spec dicts into language-specific render objects, then renders templates and writes the output.
 
 Steps 1-3 are language-agnostic; step 4 is the adapter's job.
+
+## The contract
+
+A capigen version plus a spec version fully determines the generated contract
+artifacts. capigen's version pins the spec language: the schema, spec parsing and
+validation, and the generation of the C header and the extension header. The spec is
+versioned with its owner (for DuckDB: the duckdb repository), and the generated
+`duckdb.h` and `duckdb_extension.h` are the real ABI contracts everything downstream
+relies on.
+
+ABI *stability* is not a property of that combination. The lifecycle states are the
+mechanism; the stability promise (what freezes, what may disappear, when) is policy,
+enforced in the spec owner's repository through its spec discipline and CI.
+
+Language bindings (DuckDB.jl's Julia layer, a future Rust binding) are consumers of
+the C ABI, not contracts themselves. Their generators live with the binding and read
+the spec through capigen's public library surface:
+
+- `capigen.loader.load_metadata` / `load_modules`: parse a spec, apply defaults, check `schema_version`.
+- `capigen.validate.validate_semantics`: cross-module referential and lifecycle checks.
+- `capigen.states.resolve_states` / `current_state`: the lifecycle vocabulary and a construct's current state.
+- `capigen.tools`: name registry (`build_registry`, `apply_prefix`), enum numbering (`resolve_enum_values`), alias chasing (`chase`), version ordering (`version_key`), module ordering.
+
+A binding generator pins `capigen~=X.Y` to read specs of that schema line; its
+correctness oracle is the binding's own test suite against the real library.
 
 ## Versioning
 
@@ -85,17 +105,20 @@ A consumer repo pins a compatible capigen (e.g. `capigen~=0.5.0`) and, because g
 
 ## Writing an adapter
 
-An adapter is a Python module exposing:
+An in-tree adapter is a module under `capigen.adapters` exposing:
 
 ```python
 def generate(modules: list[dict], metadata: dict, output_path: Path) -> None
 ```
 
 - `modules` is a list of validated spec dicts (defaults applied).
-- `metadata` carries `primitives` (with C ABI type names), `suffixes` (naming conventions per construct), `versions`, `schema_version`, and any adapter `options`.
-- Built-in adapters live under `capigen.adapters`.
-- External adapters are any importable module with a `generate` function.
+- `metadata` carries `primitives` (with C ABI type names), `suffixes` (naming conventions per construct), `versions`, `lifecycle_states`, `schema_version`, and any adapter `options`.
+- An in-tree adapter also declares its options namespace in `metadata.schema.json`.
 - Adapters may accept extra keyword parameters (e.g. `scan_dir`, `template`, `internal_out`, `invocation`). The CLI passes those a given adapter declares.
+
+In-tree is for contract-defining output (and engine tooling like the bridge). A
+binding generator belongs in its binding's repository, built on the public library
+surface above, with its configuration committed there.
 
 ## C adapter
 

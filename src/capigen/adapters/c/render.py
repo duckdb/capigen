@@ -39,7 +39,8 @@ class CTypeDef:
     tagged_struct: bool = False  # True -> implies a pointer typedef + is_pointer=True
     is_qualified: bool = False
     description: str = ""
-    unstable: bool = False
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
 
 
 @dataclass
@@ -49,7 +50,8 @@ class CStruct:
     pointer_alias: bool
     fields: list[CField]
     description: str = ""
-    unstable: bool = False
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
 
 
 @dataclass
@@ -69,7 +71,8 @@ class CFuncPtr:
     return_const: bool
     params: list[CFuncPtrParam]
     description: str = ""
-    unstable: bool = False
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
 
 
 @dataclass
@@ -86,13 +89,15 @@ class CFunction:
     deprecated: str | None
     return_c: str
     static_inline: bool = False
-    unstable: bool = False
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
+    deprecated_gate: bool = False  # legacy `deprecated` field: wrap in #ifndef
     parameters: dict[str, CParam] = field(default_factory=dict)
 
 
 @dataclass
 class CEnumValue:
-    value: int
+    value: int | str  # str for expression values, e.g. the 0x7FFFFFFF sentinel
     description: str = ""
 
 
@@ -101,7 +106,8 @@ class CEnum:
     name: str
     description: str
     values: dict[str, CEnumValue]
-    unstable: bool = False
+    omitted: bool = False
+    guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
 
 
 @dataclass

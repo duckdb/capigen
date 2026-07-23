@@ -48,21 +48,20 @@ class TestFormatCType:
 class TestResolveCOptions:
     def test_defaults_from_prefix(self):
         opts = resolve_c_options({"prefix": "duckdb_"})
-        assert opts["api_macro"] == "DUCKDB_C_API"
-        assert opts["extension_api_macro"] == "DUCKDB_EXTENSION_API"
+        assert opts["export_macro"] == "DUCKDB_C_API"
+        assert opts["extension_export_macro"] == "DUCKDB_EXTENSION_API"
         assert opts["deprecated_macro"] == "DUCKDB_DEPRECATED"
-        assert opts["no_deprecated_guard"] == "DUCKDB_API_NO_DEPRECATED"
-        assert opts["unstable_guard"] == "DUCKDB_API_UNSTABLE"
+        assert opts["no_deprecated_guard"] == ""  # no states, no gate
         assert opts["typedef_guard_prefix"] == "DUCKDB_TYPEDEF_"
 
     def test_defaults_scale_with_prefix(self):
         opts = resolve_c_options({"prefix": "duckdb_v2_"})
-        assert opts["api_macro"] == "DUCKDB_V2_C_API"
+        assert opts["export_macro"] == "DUCKDB_V2_C_API"
         assert opts["typedef_guard_prefix"] == "DUCKDB_V2_TYPEDEF_"
 
     def test_empty_prefix(self):
         opts = resolve_c_options({})
-        assert opts["api_macro"] == "C_API"
+        assert opts["export_macro"] == "C_API"
 
     def test_default_banner_derives_name_from_prefix(self):
         opts = resolve_c_options({"prefix": "myapi_"})
@@ -74,42 +73,30 @@ class TestResolveCOptions:
             "prefix": "duckdb_",
             "options": {
                 "c": {
-                    "api_macro": "MY_API",
-                    "extension_api_macro": "MY_EXT_API",
+                    "export_macro": "MY_API",
+                    "extension_export_macro": "MY_EXT_API",
                     "deprecated_macro": "MY_DEPRECATED",
-                    "no_deprecated_guard": "MY_NO_DEPRECATED",
-                    "unstable_guard": "MY_UNSTABLE",
                     "typedef_guard_prefix": "MY_TYPEDEF_",
                     "banner": "// custom banner",
                 }
             },
         }
         opts = resolve_c_options(meta)
-        assert opts["api_macro"] == "MY_API"
-        assert opts["extension_api_macro"] == "MY_EXT_API"
+        assert opts["export_macro"] == "MY_API"
+        assert opts["extension_export_macro"] == "MY_EXT_API"
         assert opts["deprecated_macro"] == "MY_DEPRECATED"
-        assert opts["no_deprecated_guard"] == "MY_NO_DEPRECATED"
-        assert opts["unstable_guard"] == "MY_UNSTABLE"
         assert opts["typedef_guard_prefix"] == "MY_TYPEDEF_"
         assert opts["banner"] == "// custom banner"
 
-    def test_unstable_guard_shared_with_extension_adapter(self):
-        """options.extension.unstable_guard is the fallback, so one macro opts in everywhere."""
+    def test_no_deprecated_guard_from_declared_states(self):
+        """The legacy deprecated gate uses the declared deprecated state's guard."""
         meta = {
             "prefix": "duckdb_",
-            "options": {"extension": {"unstable_guard": "EXT_UNSTABLE"}},
-        }
-        assert resolve_c_options(meta)["unstable_guard"] == "EXT_UNSTABLE"
-
-    def test_explicit_unstable_guard_wins_over_extension(self):
-        meta = {
-            "prefix": "duckdb_",
-            "options": {
-                "c": {"unstable_guard": "C_UNSTABLE"},
-                "extension": {"unstable_guard": "EXT_UNSTABLE"},
+            "lifecycle_states": {
+                "deprecated": {"visibility": "opt_out", "guard": "MY_DEP"}
             },
         }
-        assert resolve_c_options(meta)["unstable_guard"] == "C_UNSTABLE"
+        assert resolve_c_options(meta)["no_deprecated_guard"] == "MY_DEP"
 
 
 class TestResolveHandles:
@@ -581,13 +568,13 @@ class TestResolveFunctions:
                         "return_pointer": 0,
                         "return_const": False,
                         "parameters": {},
-                        "deprecated": "1.0.0",
+                        "deprecated": "v1.0.0",
                     },
                 },
             )
         ]
         result = resolve_modules(modules, metadata)
-        assert result[0].functions["old_func"].deprecated == "1.0.0"
+        assert result[0].functions["old_func"].deprecated == "v1.0.0"
 
     def test_param_description(self, metadata, make_module):
         modules = [
@@ -804,37 +791,60 @@ class TestResolveModule:
 UNSTABLE = [["unstable", "v1.0.0", "2026-01-01"]]
 
 
-class TestUnstableStatus:
-    """The current (top) status entry decides the unstable flag."""
+class TestStateGating:
+    """The current (top) status entry decides omission and the guard directive."""
 
-    def test_handle_unstable(self, metadata, make_module):
-        modules = [make_module("m", handles={"h": {"status": UNSTABLE}})]
-        result = resolve_modules(modules, metadata)
-        assert result[0].types[0].unstable is True
+    def test_unstable_handle_gets_opt_in_directive(self, metadata, make_module):
+        modules = [make_module("m", handles={"h": {"lifecycle": UNSTABLE}})]
+        t = resolve_modules(modules, metadata)[0].types[0]
+        assert t.guard_directive == "#ifdef API_UNSTABLE"
+        assert t.omitted is False
 
-    def test_no_status_is_not_unstable(self, metadata, make_module):
+    def test_no_status_is_visible(self, metadata, make_module):
         modules = [make_module("m", handles={"h": {}})]
-        result = resolve_modules(modules, metadata)
-        assert result[0].types[0].unstable is False
+        t = resolve_modules(modules, metadata)[0].types[0]
+        assert t.guard_directive == ""
+        assert t.omitted is False
 
-    def test_stabilized_history_is_not_unstable(self, metadata, make_module):
+    def test_stabilized_history_is_visible(self, metadata, make_module):
         """An older unstable entry below a stable top entry does not gate."""
         status = [
             ["stable", "v1.1.0", "2026-06-01"],
             ["unstable", "v1.0.0", "2026-01-01"],
         ]
-        modules = [make_module("m", handles={"h": {"status": status}})]
-        result = resolve_modules(modules, metadata)
-        assert result[0].types[0].unstable is False
+        modules = [make_module("m", handles={"h": {"lifecycle": status}})]
+        assert resolve_modules(modules, metadata)[0].types[0].guard_directive == ""
 
-    def test_alias_unstable(self, metadata, make_module):
-        modules = [
-            make_module("m", aliases={"a": {"underlying": "u32", "status": UNSTABLE}})
-        ]
-        result = resolve_modules(modules, metadata)
-        assert result[0].types[0].unstable is True
+    def test_removed_handle_is_omitted(self, metadata, make_module):
+        status = [["removed", "v1.0.0", "2026-01-01"]]
+        modules = [make_module("m", handles={"h": {"lifecycle": status}})]
+        t = resolve_modules(modules, metadata)[0].types[0]
+        assert t.omitted is True
+        assert t.guard_directive == ""
 
-    def test_qualified_alias_unstable(self, metadata, make_module):
+    def test_deprecated_handle_gets_opt_out_directive(self, metadata, make_module):
+        status = [["deprecated", "v1.1.0", "2026-06-01"]]
+        modules = [make_module("m", handles={"h": {"lifecycle": status}})]
+        t = resolve_modules(modules, metadata)[0].types[0]
+        assert t.guard_directive == "#ifndef API_NO_DEPRECATED"
+
+    def test_declared_states_supply_the_guard(self, metadata, make_module):
+        metadata["lifecycle_states"] = {
+            "unstable": {"visibility": "opt_in", "guard": "MY_GUARD"}
+        }
+        modules = [make_module("m", handles={"h": {"lifecycle": UNSTABLE}})]
+        t = resolve_modules(modules, metadata)[0].types[0]
+        assert t.guard_directive == "#ifdef MY_GUARD"
+
+    def test_unknown_state_is_visible_at_resolve_time(self, metadata, make_module):
+        """Resolve is lenient; validate_semantics rejects the unknown name."""
+        status = [["experimental", "v1.0.0", "2026-01-01"]]
+        modules = [make_module("m", handles={"h": {"lifecycle": status}})]
+        t = resolve_modules(modules, metadata)[0].types[0]
+        assert t.guard_directive == ""
+        assert t.omitted is False
+
+    def test_qualified_alias_gets_directive(self, metadata, make_module):
         modules = [
             make_module(
                 "m",
@@ -842,15 +852,15 @@ class TestUnstableStatus:
                     "idx_t": {
                         "underlying": "u64",
                         "qualified": True,
-                        "status": UNSTABLE,
+                        "lifecycle": UNSTABLE,
                     }
                 },
             )
         ]
-        result = resolve_modules(modules, metadata)
-        assert result[0].types[0].unstable is True
+        t = resolve_modules(modules, metadata)[0].types[0]
+        assert t.guard_directive == "#ifdef API_UNSTABLE"
 
-    def test_struct_unstable(self, metadata, make_module):
+    def test_struct_callback_enum_get_directives(self, metadata, make_module):
         modules = [
             make_module(
                 "m",
@@ -859,40 +869,27 @@ class TestUnstableStatus:
                         "fields": [
                             {"name": "f", "type": "u32", "pointer": 0, "const": False}
                         ],
-                        "status": UNSTABLE,
+                        "lifecycle": UNSTABLE,
                     }
                 },
-            )
-        ]
-        result = resolve_modules(modules, metadata)
-        assert result[0].structs[0].unstable is True
-
-    def test_callback_unstable(self, metadata, make_module):
-        modules = [
-            make_module(
-                "m",
                 callbacks={
                     "cb": {
                         "return_type": "opaque",
                         "return_pointer": 0,
                         "return_const": False,
                         "parameters": {},
-                        "status": UNSTABLE,
+                        "lifecycle": UNSTABLE,
                     }
                 },
+                enums={"E": {"values": {"A": {}}, "lifecycle": UNSTABLE}},
             )
         ]
-        result = resolve_modules(modules, metadata)
-        assert result[0].function_ptrs[0].unstable is True
+        m = resolve_modules(modules, metadata)[0]
+        assert m.structs[0].guard_directive == "#ifdef API_UNSTABLE"
+        assert m.function_ptrs[0].guard_directive == "#ifdef API_UNSTABLE"
+        assert m.enums[0].guard_directive == "#ifdef API_UNSTABLE"
 
-    def test_enum_unstable(self, metadata, make_module):
-        modules = [
-            make_module("m", enums={"E": {"values": {"A": {}}, "status": UNSTABLE}})
-        ]
-        result = resolve_modules(modules, metadata)
-        assert result[0].enums[0].unstable is True
-
-    def test_function_unstable(self, metadata, make_module):
+    def test_unstable_function(self, metadata, make_module):
         modules = [
             make_module(
                 "m",
@@ -902,12 +899,191 @@ class TestUnstableStatus:
                         "return_pointer": 0,
                         "return_const": False,
                         "parameters": {},
-                        "status": UNSTABLE,
+                        "lifecycle": UNSTABLE,
                     }
                 },
             )
         ]
-        result = resolve_modules(modules, metadata)
-        f = result[0].functions["f"]
-        assert f.unstable is True
+        f = resolve_modules(modules, metadata)[0].functions["f"]
+        assert f.guard_directive == "#ifdef API_UNSTABLE"
         assert f.deprecated is None
+        assert f.deprecated_gate is False
+
+    def test_deprecated_by_status_uses_directive_not_gate(self, metadata, make_module):
+        status = [["deprecated", "v1.1.0", "2026-06-01"]]
+        modules = [
+            make_module(
+                "m",
+                functions={
+                    "f": {
+                        "return_type": "i32",
+                        "return_pointer": 0,
+                        "return_const": False,
+                        "parameters": {},
+                        "lifecycle": status,
+                    }
+                },
+            )
+        ]
+        f = resolve_modules(modules, metadata)[0].functions["f"]
+        assert f.guard_directive == "#ifndef API_NO_DEPRECATED"
+        assert f.deprecated == "v1.1.0"
+        assert f.deprecated_gate is False
+
+    def test_legacy_deprecated_field_uses_gate_not_directive(
+        self, metadata, make_module
+    ):
+        modules = [
+            make_module(
+                "m",
+                functions={
+                    "f": {
+                        "return_type": "i32",
+                        "return_pointer": 0,
+                        "return_const": False,
+                        "parameters": {},
+                        "deprecated": "v1.0.0",
+                    }
+                },
+            )
+        ]
+        f = resolve_modules(modules, metadata)[0].functions["f"]
+        assert f.guard_directive == ""
+        assert f.deprecated == "v1.0.0"
+        assert f.deprecated_gate is True
+
+    def test_legacy_deprecated_without_opt_out_state_is_ungated(
+        self, metadata, make_module
+    ):
+        """No opt_out deprecated state declared: the legacy field gates nothing."""
+        metadata["lifecycle_states"] = {"live": {"visibility": "always"}}
+        modules = [
+            make_module(
+                "m",
+                functions={
+                    "f": {
+                        "return_type": "i32",
+                        "return_pointer": 0,
+                        "return_const": False,
+                        "parameters": {},
+                        "deprecated": "v1.0.0",
+                    }
+                },
+            )
+        ]
+        f = resolve_modules(modules, metadata)[0].functions["f"]
+        assert f.deprecated_gate is False
+        assert f.guard_directive == ""
+
+    def test_legacy_deprecated_with_visible_deprecated_state_is_ungated(
+        self, metadata, make_module
+    ):
+        metadata["lifecycle_states"] = {"deprecated": {"visibility": "always"}}
+        modules = [
+            make_module(
+                "m",
+                functions={
+                    "f": {
+                        "return_type": "i32",
+                        "return_pointer": 0,
+                        "return_const": False,
+                        "parameters": {},
+                        "deprecated": "v1.0.0",
+                    }
+                },
+            )
+        ]
+        f = resolve_modules(modules, metadata)[0].functions["f"]
+        assert f.deprecated_gate is False
+
+    def test_no_states_block_means_no_states(self, metadata, make_module):
+        """Without a states block nothing gates; validate rejects the status."""
+        del metadata["lifecycle_states"]
+        modules = [make_module("m", handles={"h": {"lifecycle": UNSTABLE}})]
+        t = resolve_modules(modules, metadata)[0].types[0]
+        assert t.guard_directive == ""
+        assert t.omitted is False
+
+    def test_empty_states_map_disables_all_gating(self, metadata, make_module):
+        """states: {} declares no states at all; everything renders visible."""
+        metadata["lifecycle_states"] = {}
+        modules = [make_module("m", handles={"h": {"lifecycle": UNSTABLE}})]
+        t = resolve_modules(modules, metadata)[0].types[0]
+        assert t.guard_directive == ""
+        assert t.omitted is False
+
+    def test_removed_function_is_omitted(self, metadata, make_module):
+        status = [["removed", "v1.1.0", "2026-06-01"]]
+        modules = [
+            make_module(
+                "m",
+                functions={
+                    "f": {
+                        "return_type": "i32",
+                        "return_pointer": 0,
+                        "return_const": False,
+                        "parameters": {},
+                        "lifecycle": status,
+                    }
+                },
+            )
+        ]
+        assert resolve_modules(modules, metadata)[0].functions["f"].omitted is True
+
+
+class TestEnumMaxSentinel:
+    """Every generated enum ends with an int-max member that pins its width."""
+
+    def test_sentinel_is_last_with_int_max_value(self, metadata, make_module):
+        modules = [make_module("m", enums={"MODE": {"values": {"A": {}, "B": {}}}})]
+        e = resolve_modules(modules, metadata)[0].enums[0]
+        assert list(e.values) == ["A", "B", "MODE_MAX_ENUM"]
+        assert e.values["MODE_MAX_ENUM"].value == "0x7FFFFFFF"
+
+    def test_sentinel_does_not_disturb_auto_numbering(self, metadata, make_module):
+        modules = [make_module("m", enums={"MODE": {"values": {"A": {}, "B": {}}}})]
+        e = resolve_modules(modules, metadata)[0].enums[0]
+        assert e.values["A"].value == 0
+        assert e.values["B"].value == 1
+
+    def test_sentinel_name_uses_prefixed_enum_name(self, metadata, make_module):
+        metadata["prefix"] = "duckdb_v2_"
+        modules = [make_module("m", enums={"MODE": {"values": {"A": {}}}})]
+        e = resolve_modules(modules, metadata)[0].enums[0]
+        assert "DUCKDB_V2_MODE_MAX_ENUM" in e.values
+
+    def test_sentinel_of_lowercase_enum_is_macro_case(self, metadata, make_module):
+        metadata["prefix"] = "lib_"
+        modules = [make_module("m", enums={"mode": {"values": {"A": {}}}})]
+        e = resolve_modules(modules, metadata)[0].enums[0]
+        assert "LIB_MODE_MAX_ENUM" in e.values
+
+    def test_sentinel_disabled_by_option(self, metadata, make_module):
+        metadata["options"] = {"c": {"emit_enum_max_member": False}}
+        modules = [make_module("m", enums={"MODE": {"values": {"A": {}}}})]
+        e = resolve_modules(modules, metadata)[0].enums[0]
+        assert list(e.values) == ["A"]
+
+    def test_omitted_enum_gets_no_sentinel_and_no_collision_error(
+        self, metadata, make_module
+    ):
+        """A removed enum is never rendered, so a sentinel-like member is fine."""
+        modules = [
+            make_module(
+                "m",
+                enums={
+                    "MODE": {
+                        "values": {"MODE_MAX_ENUM": {}},
+                        "lifecycle": [["removed", "v1.0.0", "2026-01-01"]],
+                    }
+                },
+            )
+        ]
+        e = resolve_modules(modules, metadata)[0].enums[0]
+        assert e.omitted is True
+        assert list(e.values) == ["MODE_MAX_ENUM"]
+
+    def test_colliding_member_name_raises(self, metadata, make_module):
+        modules = [make_module("m", enums={"MODE": {"values": {"MODE_MAX_ENUM": {}}}})]
+        with pytest.raises(ValueError, match="collides with the"):
+            resolve_modules(modules, metadata)

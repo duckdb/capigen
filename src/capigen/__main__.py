@@ -47,13 +47,6 @@ def main() -> None:
         dest="internal_out",
         help="Path for the derived engine-side header (extension_header adapter only)",
     )
-    parser.add_argument(
-        "--emit-deprecated",
-        choices=["true", "false", "strict"],
-        default=None,
-        dest="emit_deprecated",
-        help="Override deprecated_encoding from metadata: true=guarded (default), false=omit entirely, strict=guarded + the configured deprecated macro attribute",
-    )
     args = parser.parse_args()
 
     spec_dir = Path(args.spec_dir)
@@ -69,12 +62,6 @@ def main() -> None:
         sys.exit(1)
     modules = load_modules(spec_dir)
 
-    if args.emit_deprecated is not None:
-        _encoding_map = {"true": "guarded", "false": "none", "strict": "strict"}
-        metadata.setdefault("options", {}).setdefault("c", {})[
-            "deprecated_encoding"
-        ] = _encoding_map[args.emit_deprecated]
-
     # 3. Semantic validation
     errors = validate_semantics(modules, metadata)
     if errors:
@@ -84,15 +71,24 @@ def main() -> None:
         print("\nGeneration aborted.", file=sys.stderr)
         sys.exit(1)
 
-    # 4. Import adapter: try as built-in first, then as external module path
+    # 4. Import the adapter. Adapters are in-tree only, versioned with the schema.
     try:
         adapter = importlib.import_module(f"capigen.adapters.{args.adapter}")
-    except ModuleNotFoundError:
-        try:
-            adapter = importlib.import_module(args.adapter)
-        except ModuleNotFoundError:
-            print(f"Error: Cannot import adapter '{args.adapter}'", file=sys.stderr)
-            sys.exit(1)
+    except ModuleNotFoundError as e:
+        if e.name != f"capigen.adapters.{args.adapter}":
+            raise  # a bug inside the adapter, not an unknown name
+        import pkgutil
+
+        import capigen.adapters
+
+        available = ", ".join(
+            sorted(m.name for m in pkgutil.iter_modules(capigen.adapters.__path__))
+        )
+        print(
+            f"Error: unknown adapter '{args.adapter}' (available: {available})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     output_path = Path(args.output)
     params = inspect.signature(adapter.generate).parameters

@@ -25,8 +25,8 @@ typedef struct {
 //===--------------------------------------------------------------------===//
 inline {{ typename }} {{ create_method }}(void) {
 	{{ typename }} result;
-{% for name in all_names %}
-	result.{{ name }} = {{ name }};
+{% for name, value in assignments %}
+	result.{{ name }} = {{ value }};
 {% endfor %}
 	return result;
 }

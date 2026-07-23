@@ -55,22 +55,25 @@ def _fn(ret="i32", params=None, static_inline=False):
 def _run_inline(tmp_path, functions, template_text, exclude=None):
     """Run generate against an inline single-module spec (full control over spec order)."""
     metadata = {
-        "schema_version": "0.4",
+        "schema_version": "0.5",
         "prefix": "t_",
-        "versions": ["1.0.0"],
+        "versions": ["v1.0.0"],
         "suffixes": {"handles": "", "callbacks": "", "aliases": ""},
         "primitives": [
             {"name": "void", "c_type": "void"},
             {"name": "i32", "c_type": "int32_t"},
         ],
+        "lifecycle_states": {
+            "unstable": {"visibility": "opt_in", "guard": "T_UNSTABLE"},
+            "stable": {"visibility": "always"},
+            "removed": {"visibility": "never"},
+        },
         "options": {
             "extension": {
-                "unstable_guard": "T_UNSTABLE",
                 "create_method": "CreateT",
-                "api_version": "v1.0.0",
                 "version_macro_prefix": "T_VERSION",
                 "internal_include": "t.h",
-                "exclude": exclude or [],
+                "exclude_functions": exclude or [],
             }
         },
     }
@@ -459,6 +462,129 @@ class TestEndToEnd:
     def test_fixture_validates(self):
         modules, metadata = _load()
         assert validate_semantics(modules, metadata) == []
+
+
+class TestStatesIntegration:
+    """The appended-region guard comes from the declared unstable state."""
+
+    def test_appended_region_uses_declared_guard(self, tmp_path):
+        functions = {"base": _fn(), "extra": _fn()}
+        template = _inline_template(["int32_t (*t_base)(void);"], ["t_base"])
+        consumer, _ = _run_inline(tmp_path, functions, template)
+        assert "#ifdef T_UNSTABLE\n\tint32_t (*t_extra)(void);" in consumer
+
+    def test_missing_unstable_state_errors(self, tmp_path):
+        modules, metadata = _load()
+        metadata["lifecycle_states"] = {"stable": {"visibility": "always"}}
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        template = tmp_path / "t.in"
+        template.write_text(TEMPLATE.read_text())
+        with pytest.raises(ValueError, match="requires an 'unstable' state"):
+            generate(
+                modules,
+                metadata,
+                tmp_path / "o.h",
+                template=template,
+                internal_out=tmp_path / "i.hpp",
+            )
+
+    def test_omitted_function_is_not_appended(self, tmp_path):
+        gone = _fn()
+        gone["lifecycle"] = [["removed", "v1.0.0", "2026-01-01"]]
+        functions = {"base": _fn(), "gone": gone, "extra": _fn()}
+        template = _inline_template(["int32_t (*t_base)(void);"], ["t_base"])
+        consumer, internal = _run_inline(tmp_path, functions, template)
+        assert "t_gone" not in consumer
+        assert "t_gone" not in internal
+        assert "t_extra" in consumer
+
+    def test_template_member_for_omitted_function_keeps_slot_as_nullptr(self, tmp_path):
+        """A frozen ABI slot survives removal; its vanished symbol is not referenced."""
+        gone = _fn()
+        gone["lifecycle"] = [["removed", "v1.0.0", "2026-01-01"]]
+        functions = {"base": _fn(), "gone": gone}
+        template = _inline_template(
+            ["int32_t (*t_base)(void);", "int32_t (*t_gone)(void);"],
+            ["t_base", "t_gone"],
+        )
+        # Must not raise: the member still resolves against the spec.
+        _, internal = _run_inline(tmp_path, functions, template)
+        assert "int32_t (*t_gone)(void);" in internal  # the slot stays
+        assert "result.t_gone = nullptr;" in internal  # the symbol does not
+        assert "result.t_base = t_base;" in internal
+
+    @pytest.mark.skipif(not HAS_CC, reason="no C compiler available")
+    def test_internal_with_removed_member_compiles(self, tmp_path):
+        """The engine header compiles although the removed symbol has no declaration."""
+        gone = _fn()
+        gone["lifecycle"] = [["removed", "v1.0.0", "2026-01-01"]]
+        functions = {"base": _fn(), "gone": gone}
+        template = _inline_template(
+            ["int32_t (*t_base)(void);", "int32_t (*t_gone)(void);"],
+            ["t_base", "t_gone"],
+        )
+        _run_inline(tmp_path, functions, template)
+        # The prelude declares only the surviving function, like the real engine.
+        (tmp_path / "t.h").write_text("#include <stdint.h>\nint32_t t_base(void);\n")
+        probe = tmp_path / "probe.cpp"
+        probe.write_text('#include "i.hpp"\n')
+        result = subprocess.run(
+            ["cc", "-fsyntax-only", "-xc++", "-I", str(tmp_path), str(probe)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+
+class TestDerivedStructVersion:
+    """The struct's version comes from the template's newest stable region tag."""
+
+    def test_version_defines_derive_from_newest_stable_region(self, tmp_path):
+        functions = {"base": _fn(), "more": _fn()}
+        template = (
+            "#pragma once\n\n"
+            "typedef struct {\n"
+            "#if T_VERSION_MINOR > 0 // v1.0.0\n"
+            "\tint32_t (*t_base)(void);\n"
+            "#endif\n"
+            "#if T_VERSION_MINOR > 2 // v1.2.0\n"
+            "\tint32_t (*t_more)(void);\n"
+            "#endif\n\n"
+            "\t// capigen:begin appended\n"
+            "\t// capigen:end appended\n"
+            "} t_api;\n\n"
+            "#ifndef T_STATIC\n"
+            "#define t_base t_api.t_base\n"
+            "#define t_more t_api.t_more\n\n"
+            "// capigen:begin appended\n"
+            "// capigen:end appended\n"
+            "#endif // T_STATIC\n"
+        )
+        _, internal = _run_inline(tmp_path, functions, template)
+        assert "#define T_VERSION_MAJOR 1" in internal
+        assert "#define T_VERSION_MINOR 2" in internal
+        assert '#define T_VERSION_STRING "v1.2.0"' in internal
+
+    def test_template_without_stable_region_errors(self, tmp_path):
+        functions = {"base": _fn()}
+        template = (
+            "#pragma once\n\n"
+            "typedef struct {\n"
+            "// group\n"
+            "#ifdef T_UNSTABLE\n"
+            "\tint32_t (*t_base)(void);\n"
+            "#endif\n\n"
+            "\t// capigen:begin appended\n"
+            "\t// capigen:end appended\n"
+            "} t_api;\n\n"
+            "#ifndef T_STATIC\n"
+            "#define t_base t_api.t_base\n\n"
+            "// capigen:begin appended\n"
+            "// capigen:end appended\n"
+            "#endif // T_STATIC\n"
+        )
+        with pytest.raises(ValueError, match="no stable '// vX.Y.Z' region"):
+            _run_inline(tmp_path, functions, template)
 
 
 class TestMissingArguments:

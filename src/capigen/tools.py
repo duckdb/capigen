@@ -1,9 +1,4 @@
-"""Reusable utilities for adapters.
-
-capigen itself does not consume these; they are provided for adapters that
-need to reason about the spec beyond what `resolve.py`-style translation
-gives them (e.g. for emission ordering, dependency analysis).
-"""
+"""Reusable spec utilities shared by capigen and its adapters."""
 
 
 def handle_dependencies(modules: list[dict]) -> dict[str, set[str]]:
@@ -126,4 +121,90 @@ def sort_modules_by_deps(modules: list[dict]) -> list[dict]:
     return [mod_by_name[m] for m in result]
 
 
-__all__ = ["handle_dependencies", "topo_sort_handles", "sort_modules_by_deps"]
+def apply_prefix(prefix: str, name: str) -> str:
+    """Prepend the prefix, uppercasing it when the name starts uppercase."""
+    if name and name[0].isupper():
+        return f"{prefix.upper()}{name}"
+    return f"{prefix}{name}"
+
+
+def build_registry(
+    modules: list[dict], suffixes: dict[str, str], prefix: str = ""
+) -> dict[str, str]:
+    """Map every declared spec name (and its prefixed form) to its C type name."""
+    registry: dict[str, str] = {}
+
+    for mod in modules:
+        for name in mod.get("handles", {}):
+            canonical = f"{apply_prefix(prefix, name)}{suffixes['handles']}"
+            registry[name] = canonical
+            registry[canonical] = canonical
+
+        for name in mod.get("callbacks", {}):
+            canonical = f"{apply_prefix(prefix, name)}{suffixes['callbacks']}"
+            registry[name] = canonical
+            registry[canonical] = canonical
+
+        for name, a in mod.get("aliases", {}).items():
+            if a.get("qualified"):
+                registry[name] = name
+            else:
+                canonical = f"{apply_prefix(prefix, name)}{suffixes['aliases']}"
+                registry[name] = canonical
+                registry[canonical] = canonical
+
+        for name, s in mod.get("structs", {}).items():
+            prefixed = apply_prefix(prefix, name)
+            if s.get("pointer_alias"):
+                alias = f"{prefixed}{suffixes['aliases']}"
+            else:
+                alias = prefixed
+            registry[name] = alias
+            registry[prefixed] = alias
+            if alias != prefixed:
+                registry[alias] = alias
+
+        for name in mod.get("enums", {}):
+            prefixed = apply_prefix(prefix, name)
+            registry[name] = prefixed
+            registry[prefixed] = prefixed
+
+    return registry
+
+
+def chase(mapping: dict, key):
+    """Follow a mapping until a key is absent or a cycle closes."""
+    seen = set()
+    while key in mapping and key not in seen:
+        seen.add(key)
+        key = mapping[key]
+    return key
+
+
+def resolve_enum_values(enum: dict) -> list[tuple[str, int]]:
+    """Auto-number enum members: sequential from 0, reset on an explicit value."""
+    values = []
+    current = 0
+    for vname, entry in enum["values"].items():
+        if entry.get("value") is not None:
+            current = entry["value"]
+        values.append((vname, current))
+        current += 1
+    return values
+
+
+def version_key(version: str) -> tuple[int, ...]:
+    """Numeric sort key for a vX.Y.Z string (leading v optional)."""
+    return tuple(int(x) for x in version.lstrip("v").split("."))
+
+
+__all__ = [
+    "apply_prefix",
+    "build_registry",
+    "chase",
+    "handle_dependencies",
+    "resolve_enum_values",
+    "sort_modules_by_deps",
+    "topo_sort_handles",
+    "version_key",
+]

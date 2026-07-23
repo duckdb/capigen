@@ -2,6 +2,10 @@
 
 capigen is published to PyPI. The package version and the IDL schema version are
 coupled: **`MAJOR.MINOR` of the package is the schema version; `PATCH` is tool-only.**
+The version pins the schema, spec parsing and validation, and C/extension header
+generation; a capigen version plus a spec version determines the contract artifacts.
+Out-of-tree binding generators pin `~=MAJOR.MINOR` for the library surface the same
+way spec authors do for the schema.
 
 ## Version rules
 
@@ -13,6 +17,10 @@ coupled: **`MAJOR.MINOR` of the package is the schema version; `PATCH` is tool-o
 - **patch** (`0.0.Z`): tool-only. No schema change. Generated output may still change
   (for example a rendering fix); when it does, the release notes must say so, because
   consumers see the diff at their next deliberate pin bump.
+
+Adapter options are part of the schema contract. `metadata.schema.json` validates
+every `options.<adapter>` namespace, so adding an option is a minor, removing or
+renaming one is a major, and a patch never touches options.
 
 The loader accepts a spec when the majors match and the spec minor is at most the tool
 minor. So a newer capigen reads any older-minor spec within the same major, and a spec

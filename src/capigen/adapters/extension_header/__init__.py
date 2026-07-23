@@ -17,8 +17,10 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from ...states import resolve_states
+from ...tools import build_registry, chase, version_key
 from ..c.render import CFunction
-from ..c.resolve import _build_registry, resolve_modules
+from ..c.resolve import resolve_modules
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -198,7 +200,7 @@ def _build_canonicalizer(modules: list[dict], metadata: dict):
     prefix = metadata.get("prefix", "")
     suffixes = metadata["suffixes"]
     primitives = {p["name"]: p["c_type"] for p in metadata["primitives"]}
-    registry = _build_registry(modules, suffixes, prefix)
+    registry = build_registry(modules, suffixes, prefix)
 
     alias_underlying: dict[str, str] = {}
     for mod in modules:
@@ -210,11 +212,7 @@ def _build_canonicalizer(modules: list[dict], metadata: dict):
             )
 
     def canonicalize(token: str) -> str:
-        seen: set[str] = set()
-        while token in alias_underlying and token not in seen:
-            seen.add(token)
-            token = alias_underlying[token]
-        return token
+        return chase(alias_underlying, token)
 
     return canonicalize
 
@@ -340,17 +338,33 @@ def generate(
         raise ValueError("extension_header adapter requires --internal-out")
 
     opts = metadata.get("options", {}).get("extension", {})
-    unstable_guard = opts["unstable_guard"]
+    # Appended members are unstable by position, gated by the unstable state's guard.
+    unstable = resolve_states(metadata).get("unstable")
+    if unstable is None or unstable.visibility != "opt_in" or not unstable.guard:
+        raise ValueError(
+            "extension_header requires an 'unstable' state with visibility "
+            "opt_in and a guard, declared under 'lifecycle_states' in metadata"
+        )
+    unstable_guard = unstable.guard
     create_method = opts["create_method"]
-    api_version = opts["api_version"]
     version_macro_prefix = opts["version_macro_prefix"]
     internal_include = opts["internal_include"]
-    exclude = set(opts.get("exclude", []))
+    exclude = set(opts.get("exclude_functions", []))
     prefix = metadata.get("prefix", "")
 
     template_text = Path(template).read_text()
     typename, regions = _extract_struct(template_text)
     api_var, define_names = _extract_defines(template_text)
+
+    # The struct's version is its newest frozen region tag. The template is
+    # the source of ABI truth, so the version is derived, never configured.
+    stable_versions = [r.version for r in regions if r.kind == "stable"]
+    if not stable_versions:
+        raise ValueError(
+            "template has no stable '// vX.Y.Z' region to derive the "
+            "struct version from"
+        )
+    api_version = max(stable_versions, key=version_key)
 
     member_list = [m.name for r in regions for m in r.members]
     duplicates = sorted({n for n in member_list if member_list.count(n) > 1})
@@ -408,11 +422,13 @@ def generate(
                     f"  spec:     {spec_sig}"
                 )
 
-    # Append spec functions absent from the template, in deterministic loader order.
+    # Append spec functions absent from the template, in deterministic loader
+    # order. Omitted functions are never appended; ones already in the template
+    # keep their frozen slot, so the ABI order never changes.
     appended: list[tuple[str, CFunction]] = []
     for mod in render_modules:
         for name, func in mod.functions.items():
-            if name in struct_names or func.static_inline:
+            if name in struct_names or func.static_inline or func.omitted:
                 continue
             bare = name[len(prefix) :] if name.startswith(prefix) else name
             if bare in exclude or name in exclude:
@@ -436,7 +452,7 @@ def generate(
     output_path.write_text(consumer)
 
     # Engine-side header: derived from the extracted order plus appends.
-    major, minor, patch = api_version.lstrip("v").split(".")
+    major, minor, patch = api_version.lstrip("v").split(".")  # regions store bare X.Y.Z
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
         keep_trailing_newline=True,
@@ -454,7 +470,13 @@ def generate(
         }
         for r in regions
     ]
-    all_names = [m.name for r in regions for m in r.members] + [n for n, _ in appended]
+    # A removed function keeps its frozen slot, but its symbol is gone from the
+    # surface; assign nullptr so the engine header compiles and the layout holds.
+    slot_names = [m.name for r in regions for m in r.members] + [n for n, _ in appended]
+    assignments = [
+        (n, "nullptr" if (f := func_by_name.get(n)) and f.omitted else n)
+        for n in slot_names
+    ]
     internal = env.get_template("internal.hpp.j2").render(
         include=internal_include,
         typename=typename,
@@ -465,7 +487,7 @@ def generate(
         patch=patch,
         regions=internal_regions,
         appended=[_render_decl(n, f) for n, f in appended],
-        all_names=all_names,
+        assignments=assignments,
     )
     internal_out = Path(internal_out)
     internal_out.parent.mkdir(parents=True, exist_ok=True)

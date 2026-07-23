@@ -67,6 +67,28 @@ class TestCliVersionFlags:
         assert result.returncode == 0
         assert result.stdout.strip() == version("capigen")
 
+    def test_unknown_adapter_lists_available(self):
+        from pathlib import Path
+
+        spec = Path(__file__).parent / "testspec" / "v2"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "capigen",
+                "rust",
+                "--spec-dir",
+                str(spec),
+                "-o",
+                "x",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+        assert "unknown adapter 'rust'" in result.stderr
+        assert "extension_header" in result.stderr  # the list names the built-ins
+
     def test_schema_version_flag(self):
         result = self._run("--schema-version")
         assert result.returncode == 0

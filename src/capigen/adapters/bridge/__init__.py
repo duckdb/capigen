@@ -7,7 +7,8 @@ then generates stubs only for the remainder. Re-running is safe and idempotent.
 import re
 from pathlib import Path
 
-from ..c.resolve import resolve_c_options, resolve_modules
+from ...states import resolve_states
+from ..c.resolve import resolve_modules
 
 
 def _scan_implemented_functions(scan_dir: Path, prefix: str) -> set[str]:
@@ -41,7 +42,7 @@ def generate(
     prefix = metadata.get("prefix", "")
     bridge_opts = metadata.get("options", {}).get("bridge", {})
     stub_return = bridge_opts.get("stub_return", f"{prefix.upper()}API_ERROR")
-    include = bridge_opts.get("include")
+    include = bridge_opts.get("include_header")
 
     implemented = _scan_implemented_functions(scan_dir, prefix) if scan_dir else set()
 
@@ -50,12 +51,16 @@ def generate(
     if invocation:
         lines.append(f"// Re-run: {invocation}")
     lines.append("")
-    # Engine side: implement the full surface, so opt in to unstable declarations.
-    unstable_guard = resolve_c_options(metadata)["unstable_guard"]
-    lines.append(f"#ifndef {unstable_guard}")
-    lines.append(f"#define {unstable_guard}")
-    lines.append("#endif")
-    lines.append("")
+    # Engine side: implement the full surface, so opt in to every gated state.
+    opt_in_guards = sorted(
+        {s.guard for s in resolve_states(metadata).values() if s.visibility == "opt_in"}
+    )
+    for guard in opt_in_guards:
+        lines.append(f"#ifndef {guard}")
+        lines.append(f"#define {guard}")
+        lines.append("#endif")
+    if opt_in_guards:
+        lines.append("")
     if include:
         lines.append(f'#include "{include}"')
         lines.append("")
@@ -63,7 +68,7 @@ def generate(
     stub_count = 0
     for mod in render_modules:
         for fname, func in mod.functions.items():
-            if fname in implemented or func.static_inline:
+            if fname in implemented or func.static_inline or func.omitted:
                 continue
 
             # Build parameter list

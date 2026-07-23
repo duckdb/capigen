@@ -10,36 +10,36 @@
 extern "C" {
 #endif
 
-#ifndef {{ c_opts.api_macro }}
+#ifndef {{ c_opts.export_macro }}
 #ifdef _WIN32
   #ifdef DUCKDB_STATIC_BUILD
-    #define {{ c_opts.api_macro }}
+    #define {{ c_opts.export_macro }}
   #elif defined(DUCKDB_BUILD_LIBRARY) && !defined(DUCKDB_BUILD_LOADABLE_EXTENSION)
-    #define {{ c_opts.api_macro }} __declspec(dllexport)
+    #define {{ c_opts.export_macro }} __declspec(dllexport)
   #else
-    #define {{ c_opts.api_macro }} __declspec(dllimport)
+    #define {{ c_opts.export_macro }} __declspec(dllimport)
   #endif
 #else
   #if defined(__GNUC__) || defined(__clang__)
-    #define {{ c_opts.api_macro }} __attribute__((visibility("default")))
+    #define {{ c_opts.export_macro }} __attribute__((visibility("default")))
   #else
-    #define {{ c_opts.api_macro }}
+    #define {{ c_opts.export_macro }}
   #endif
 #endif
 #endif
 
-#ifndef {{ c_opts.extension_api_macro }}
+#ifndef {{ c_opts.extension_export_macro }}
 #ifdef _WIN32
   #ifdef DUCKDB_STATIC_BUILD
-    #define {{ c_opts.extension_api_macro }}
+    #define {{ c_opts.extension_export_macro }}
   #else
-    #define {{ c_opts.extension_api_macro }} __declspec(dllexport)
+    #define {{ c_opts.extension_export_macro }} __declspec(dllexport)
   #endif
 #else
   #if defined(__GNUC__) || defined(__clang__)
-    #define {{ c_opts.extension_api_macro }} __attribute__((visibility("default")))
+    #define {{ c_opts.extension_export_macro }} __attribute__((visibility("default")))
   #else
-    #define {{ c_opts.extension_api_macro }}
+    #define {{ c_opts.extension_export_macro }}
   #endif
 #endif
 #endif

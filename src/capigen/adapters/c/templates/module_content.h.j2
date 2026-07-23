@@ -5,9 +5,9 @@
 
 /* --- Enums for {{ module.name }} --- */
 
-{% for enum in module.enums %}
-{% if enum.unstable %}
-#ifdef {{ c_opts.unstable_guard }}
+{% for enum in module.enums if not enum.omitted %}
+{% if enum.guard_directive %}
+{{ enum.guard_directive }}
 {% endif %}
 {% if enum.description %}{{ enum.description | c_doc }}
 {% endif %}typedef enum {{ enum.name }} {
@@ -21,7 +21,7 @@
   {{ value_name }} = {{ value.value }},
   {% endfor %}
 } {{ enum.name }};
-{% if enum.unstable %}
+{% if enum.guard_directive %}
 #endif
 {% endif %}
 
@@ -29,12 +29,12 @@
 
 /* --- Struct forward declarations for {{ module.name }} --- */
 
-{% for s in module.structs %}
-{% if s.unstable %}
-#ifdef {{ c_opts.unstable_guard }}
+{% for s in module.structs if not s.omitted %}
+{% if s.guard_directive %}
+{{ s.guard_directive }}
 {% endif %}
 {{ render_struct_fwd(s) }}
-{% if s.unstable %}
+{% if s.guard_directive %}
 #endif
 {% endif %}
 
@@ -42,12 +42,12 @@
 
 /* --- Types for {{ module.name }} --- */
 
-{% for type in module.types %}
-{% if type.unstable %}
-#ifdef {{ c_opts.unstable_guard }}
+{% for type in module.types if not type.omitted %}
+{% if type.guard_directive %}
+{{ type.guard_directive }}
 {% endif %}
 {{ render_type(type, c_opts.typedef_guard_prefix) }}
-{% if type.unstable %}
+{% if type.guard_directive %}
 #endif
 {% endif %}
 
@@ -78,26 +78,25 @@
 
 /* --- Function pointer typedefs for {{ module.name }} --- */
 
-{% for fp in module.function_ptrs %}
-{% if fp.unstable %}
-#ifdef {{ c_opts.unstable_guard }}
+{% for fp in module.function_ptrs if not fp.omitted %}
+{% if fp.guard_directive %}
+{{ fp.guard_directive }}
 {% endif %}
 {{ render_funcptr(fp) }}
-{% if fp.unstable %}
+{% if fp.guard_directive %}
 #endif
 {% endif %}
 
 {% endfor %}
 
 /* --- Functions for {{ module.name }} --- */
-{% set dep_enc = metadata.get('options', {}).get('c', {}).get('deprecated_encoding', 'guarded') %}
-{% for func_name, func in module.functions.items() %}
-{% if not func.static_inline and not (func.deprecated and dep_enc == 'none') %}
+{% for func_name, func in module.functions.items() if not func.omitted %}
+{% if not func.static_inline %}
 
-{% if func.unstable %}
-#ifdef {{ c_opts.unstable_guard }}
+{% if func.guard_directive %}
+{{ func.guard_directive }}
 {% endif %}
-{% if func.deprecated %}
+{% if func.deprecated_gate %}
 #ifndef {{ c_opts.no_deprecated_guard }}
 {% endif %}
   {%- if func.description -%}
@@ -110,7 +109,7 @@
  * @return {{ func.return_c }}
  */
   {% endif %}
-{{ c_opts.api_macro }} {% if func.deprecated and dep_enc == 'strict' -%}{{ c_opts.deprecated_macro }} {% endif %}
+{{ c_opts.export_macro }} {% if func.deprecated and c_opts.emit_deprecated_attribute -%}{{ c_opts.deprecated_macro }} {% endif %}
 {{ func.return_c }} {{ func_name }}(
       {%- if func.parameters -%}
       {%- for name, param in func.parameters.items() -%}
@@ -118,10 +117,10 @@
       {%- endfor -%}
       {%- else -%}void{%- endif -%}
   );
-{% if func.deprecated %}
+{% if func.deprecated_gate %}
 #endif
 {% endif %}
-{% if func.unstable %}
+{% if func.guard_directive %}
 #endif
 {% endif %}
 {% endif %}
@@ -129,12 +128,12 @@
 
 /* --- Struct definitions for {{ module.name }} --- */
 
-{% for s in module.structs %}
-{% if s.unstable %}
-#ifdef {{ c_opts.unstable_guard }}
+{% for s in module.structs if not s.omitted %}
+{% if s.guard_directive %}
+{{ s.guard_directive }}
 {% endif %}
 {{ render_struct_body(s) }}
-{% if s.unstable %}
+{% if s.guard_directive %}
 #endif
 {% endif %}
 

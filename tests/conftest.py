@@ -24,7 +24,14 @@ def _make_module(name, **overrides):
 def metadata():
     """Minimal metadata dict matching metadata.schema.json."""
     return {
-        "versions": ["1.0.0", "1.1.0"],
+        "versions": ["v1.0.0", "v1.1.0"],
+        "lifecycle_states": {
+            "unstable": {"visibility": "opt_in", "guard": "API_UNSTABLE"},
+            "stable": {"visibility": "always"},
+            "frozen": {"visibility": "always"},
+            "deprecated": {"visibility": "opt_out", "guard": "API_NO_DEPRECATED"},
+            "removed": {"visibility": "never"},
+        },
         "suffixes": {
             "handles": "_ptr",
             "callbacks": "_cb",

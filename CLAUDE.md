@@ -58,6 +58,13 @@ Steps 1 to 3 are adapter-agnostic. Step 4 is the adapter.
 
 ## Versioning
 
+capigen's version pins the contract machinery: the schema, spec parsing and
+validation, and the C header and extension header generation. capigen version plus
+spec version equals the contract. ABI stability itself is duckdb-repo policy,
+enforced there through spec discipline; the lifecycle states are only the mechanism.
+Binding generators (DuckDB.jl's Julia layer) live with their bindings and consume
+the public library surface (loader, validate, states, tools).
+
 The package version and the schema version are coupled. `MAJOR.MINOR` of the package is
 the schema version. `PATCH` is tool-only. `SCHEMA_VERSION` is derived from the installed
 version, so the two cannot drift. A spec pins a two-part `schema_version`. See
@@ -181,16 +188,25 @@ options:
 
 `default_style` sets every handle. `override_style` maps a bare handle name to an
 alternative. Only `void_ptr` is honored as an override; any other value inherits the
-default. The schema validates only the top-level shape of `options`, so a typo under
-`options.c.handles` is not caught. Verify by inspecting the output.
+default. The `options` block is schema-validated per adapter namespace, so a typo
+under `options.c.handles` fails at load.
 
 Changing a handle's style is an ABI break. The typedef name stays the same but the type
 identity does not. Decide per handle when you introduce it.
 
-### Unstable gating
+### Lifecycle states
 
-A construct whose current status is `unstable` (the top entry of its `status` stack) is
-guarded in the generated header. Consumers opt in by defining the guard macro:
+A construct's current state is the top entry of its `lifecycle` stack. The state's
+visibility decides how the C adapter emits the construct. `src/capigen/states.py` resolves the declared
+states; `schema_reference.md` documents the `lifecycle_states` block and the
+visibility table.
+
+There is no built-in vocabulary: a spec declares every state it uses under
+`lifecycle_states` in metadata, and guard tokens live on the state declaration, not
+in adapter options.
+The conventional block gates `unstable` opt-in (`#ifdef LIB_API_UNSTABLE`) and
+`deprecated` opt-out (`#ifndef LIB_API_NO_DEPRECATED`), keeps `stable` and `frozen`
+visible, and omits `removed`.
 
 ```c
 #ifdef LIB_API_UNSTABLE
@@ -199,23 +215,49 @@ typedef void *lib_scratch_ptr;
 #endif
 ```
 
-This applies to every construct that accepts `status`: handles, callbacks, aliases,
-structs, enums, and functions. A struct's forward declaration and its definition are
-both guarded.
+Gating applies to every construct that accepts `lifecycle`. A struct's forward declaration
+and its definition are both guarded. An omitted construct disappears from the header
+entirely.
 
-The guard token comes from `options.c.unstable_guard`. It falls back to
-`options.extension.unstable_guard`, shared with the extension_header adapter so one
-macro opts in everywhere, and then to `{PREFIX}API_UNSTABLE`. The gate is always opt-in
-(`#ifdef`), unlike the deprecated gate, which is opt-out (`#ifndef`).
+Cross-module validation enforces one invariant: a construct may reference a type only
+if every guard configuration that emits the construct also emits the type. So a visible
+construct cannot reference an unstable or removed type, opt-in constructs can only
+reference opt-in types under the same guard, and only omitted constructs reference
+omitted types.
+The check covers alias underlyings, struct fields, signatures, and a handle's
+`cleanup_with`.
 
-Cross-module validation rejects a symbol that is not itself unstable but references an
-unstable type. Such a reference would break the header whenever the guard is off. Mark
-the referrer unstable too, or stabilize the type first.
+Per-adapter behavior:
 
-The bridge adapter still generates stubs for unstable functions. The engine always
-implements them; the guard only hides the declarations from consumers. The stub file
-defines the guard before its include, so the engine side compiles the full surface
-without extra build flags.
+- The bridge adapter defines every opt-in guard at the top of the stub file, because
+  the engine implements the full surface. Omitted functions get no stub.
+- The extension_header adapter gates appended members with the `unstable` state's guard
+  and requires that state to be opt-in. Omitted functions are never appended, but a
+  frozen template member whose function is now removed keeps its slot, so the vtable
+  ABI never shifts.
+- A function with the legacy `deprecated` field (no status) still gates with the
+  deprecated state's guard via the template's own `#ifndef` wrap. The gate fires
+  only when the declared states include an opt-out `deprecated` state, so the
+  rendered guards always match what validation modeled.
+- The old token options (`options.c.unstable_guard`, `options.c.no_deprecated_guard`,
+  `options.extension.unstable_guard`) fail schema validation at load, never
+  silently ignored.
+
+The division of labor is strict: what a construct is, and whether it is emitted, is
+spec-level (types, signatures, states). How an adapter renders it is `options.<adapter>`
+config, schema-validated per namespace. No option changes emission, so validation's
+emission model is exact. `options.c.emit_deprecated_attribute` only adds the compiler
+warning attribute to deprecated declarations; dropping a construct is spelled
+`{visibility: never}` on its state.
+
+### Enum width pinning
+
+The C adapter appends `<ENUM>_MAX_ENUM = 0x7FFFFFFF` as the last member of every enum.
+The int-max member stops compilers from shrinking the underlying type (for example
+under `-fshort-enums`), so struct layout and call signatures stay fixed. It pins a
+floor, not an exact type. The value must stay int-max: pre-C23, an enum constant must
+fit in `int`. Disable with `options.c.emit_enum_max_member: false`. A spec member named
+exactly `<ENUM>_MAX_ENUM` is a resolve error.
 
 ### Qualified aliases
 
