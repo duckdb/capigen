@@ -35,6 +35,7 @@ committed output stays in sync with the spec.
 src/capigen/
   __init__.py     # __version__, SCHEMA_VERSION
   __main__.py     # CLI
+  spec.py         # capigen.load(): one-call load + validate, returns Spec
   loader.py       # load YAML, validate against JSON Schema, check schema_version
   validate.py     # cross-module referential integrity
   tools.py        # module dependency ordering
@@ -175,21 +176,20 @@ typedef struct _lib_connection {
 } *lib_connection_handle;
 ```
 
-Configure it under the C adapter's namespace in `metadata.yaml`:
+Configure it in the C adapter's options file (`options/c.yaml` next to the spec's
+`metadata.yaml`):
 
 ```yaml
-options:
-  c:
-    handles:
-      default_style: tagged_struct   # void_ptr (default) or tagged_struct
-      override_style:
-        error_info: void_ptr         # keep this one a plain void*
+handles:
+  default_style: tagged_struct   # void_ptr (default) or tagged_struct
+  override_style:
+    error_info: void_ptr         # keep this one a plain void*
 ```
 
 `default_style` sets every handle. `override_style` maps a bare handle name to an
 alternative. Only `void_ptr` is honored as an override; any other value inherits the
-default. The `options` block is schema-validated per adapter namespace, so a typo
-under `options.c.handles` fails at load.
+default. Each adapter's options file is validated against the adapter's own strict
+schema before generation, so a typo fails at load.
 
 Changing a handle's style is an ABI break. The typedef name stays the same but the type
 identity does not. Decide per handle when you introduce it.
@@ -239,16 +239,16 @@ Per-adapter behavior:
   deprecated state's guard via the template's own `#ifndef` wrap. The gate fires
   only when the declared states include an opt-out `deprecated` state, so the
   rendered guards always match what validation modeled.
-- The old token options (`options.c.unstable_guard`, `options.c.no_deprecated_guard`,
-  `options.extension.unstable_guard`) fail schema validation at load, never
-  silently ignored.
+- The old token options (`unstable_guard`, `no_deprecated_guard`) fail the C
+  adapter's options schema, never silently ignored.
 
 The division of labor is strict: what a construct is, and whether it is emitted, is
-spec-level (types, signatures, states). How an adapter renders it is `options.<adapter>`
-config, schema-validated per namespace. No option changes emission, so validation's
-emission model is exact. `options.c.emit_deprecated_attribute` only adds the compiler
-warning attribute to deprecated declarations; dropping a construct is spelled
-`{visibility: never}` on its state.
+spec-level (types, signatures, states) and lives in metadata.yaml and the modules.
+How an adapter renders it lives in that adapter's options file
+(`options/<adapter>.yaml` next to the spec), validated against the adapter's own
+schema. No option changes emission, so validation's emission model is exact.
+`emit_deprecated_attribute` only adds the compiler warning attribute to deprecated
+declarations; dropping a construct is spelled `{visibility: never}` on its state.
 
 ### Enum width pinning
 

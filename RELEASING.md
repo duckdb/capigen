@@ -18,9 +18,9 @@ way spec authors do for the schema.
   (for example a rendering fix); when it does, the release notes must say so, because
   consumers see the diff at their next deliberate pin bump.
 
-Adapter options are part of the schema contract. `metadata.schema.json` validates
-every `options.<adapter>` namespace, so adding an option is a minor, removing or
-renaming one is a major, and a patch never touches options.
+Adapter options are part of each adapter's contract: every adapter ships a strict
+schema for its options file, versioned with the package. Adding an option is a
+minor, removing or renaming one is a major, and a patch never touches options.
 
 The loader accepts a spec when the majors match and the spec minor is at most the tool
 minor. So a newer capigen reads any older-minor spec within the same major, and a spec

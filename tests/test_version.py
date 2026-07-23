@@ -67,7 +67,7 @@ class TestCliVersionFlags:
         assert result.returncode == 0
         assert result.stdout.strip() == version("capigen")
 
-    def test_unknown_adapter_lists_available(self):
+    def test_unresolvable_adapter_lists_builtins(self):
         from pathlib import Path
 
         spec = Path(__file__).parent / "testspec" / "v2"
@@ -86,8 +86,40 @@ class TestCliVersionFlags:
             text=True,
         )
         assert result.returncode == 1
-        assert "unknown adapter 'rust'" in result.stderr
+        assert "cannot import adapter 'rust'" in result.stderr
         assert "extension_header" in result.stderr  # the list names the built-ins
+
+    def test_external_adapter_module_runs(self, tmp_path):
+        """The CLI is a thin runner: any importable module with generate() works."""
+        from pathlib import Path
+        import os
+
+        (tmp_path / "myadapter.py").write_text(
+            "from pathlib import Path\n"
+            "def generate(modules, metadata, output_path):\n"
+            "    names = [f for m in modules for f in m.get('functions', {})]\n"
+            "    Path(output_path).write_text('\\n'.join(names))\n"
+        )
+        spec = Path(__file__).parent / "testspec" / "v2"
+        out = tmp_path / "out.txt"
+        env = dict(os.environ, PYTHONPATH=str(tmp_path))
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "capigen",
+                "myadapter",
+                "--spec-dir",
+                str(spec),
+                "-o",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "open" in out.read_text()
 
     def test_schema_version_flag(self):
         result = self._run("--schema-version")

@@ -72,7 +72,6 @@ Global settings shared by all modules.
 | `primitives` | yes | Primitive type vocabulary. See below. |
 | `prefix` | no | Prepended to every generated identifier. E.g. `duckdb_v2_` gives `duckdb_v2_open`. Uppercased for constants and enum values. |
 | `lifecycle_states` | no | The lifecycle states constructs can be in, and how each renders. See below. Only declared states exist. |
-| `options` | no | Adapter settings, keyed by adapter name (`c`, `bridge`, `extension`). Each adapter reads its own namespace. Schema-validated: a typo or an unknown namespace fails at load. See below. |
 
 ### suffixes
 
@@ -121,13 +120,37 @@ metadata only.
 | `c_type` | yes | C type in the ABI (e.g. `uint32_t`, `void`). |
 | `underlying` | no | If set, the header emits `typedef <underlying> <c_type>;` in its preamble. |
 
-### options
+### Adapter options files
 
-Per-adapter rendering settings. What a construct *is* lives in the spec proper (types,
-signatures, states); how an adapter *renders* it lives here. Guard tokens are not
-options: they live on the state declarations.
+metadata.yaml is pure spec. Adapter rendering options live in separate files in the
+reserved `options/` directory next to it, one per adapter, named after the adapter:
 
-`options.c`, all optional:
+```
+api_spec/v2/
+  metadata.yaml
+  options/
+    c.yaml
+    bridge.yaml
+    extension_header.yaml
+  <modules...>
+```
+
+The file's content is the adapter's options, flat (the filename is the namespace).
+Each adapter ships a strict schema for its file (`additionalProperties: false`), and
+the CLI validates the file against it before generating, so a typo fails loudly. Pass
+`--options PATH` to use a file outside the convention. The `options/` directory is
+never scanned for modules. For editor autocomplete, point the modeline at the
+adapter's schema:
+
+```yaml
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.5.0/src/capigen/adapters/c/options.schema.json
+```
+
+What a construct *is* lives in the spec proper (types, signatures, lifecycle states);
+how an adapter *renders* it lives in its options file. Guard tokens are not options:
+they live on the state declarations.
+
+`options/c.yaml`, all optional:
 
 | Field | Default | Description |
 |---|---|---|
@@ -144,12 +167,12 @@ options: they live on the state declarations.
 | `emit_arrow_defs` | `false` | Emit the Arrow C Data Interface structs in the preamble. |
 | `emit_extension_api` | `false` | Emit the `duckdb_extension_access` struct. |
 
-`options.bridge`, all optional: `stub_return` (default `{PREFIX}API_ERROR`),
-`include_header` (header the stub file includes).
+`options/bridge.yaml`: `include_header` (header the stub file includes) and
+`stub_return` (expression every stub returns; required whenever a stub is generated).
 
-`options.extension`: `create_method`, `version_macro_prefix`, and `internal_include`
-are required; `exclude_functions` is optional. The struct's version is derived from
-the template's newest stable `// vX.Y.Z` region tag, never configured.
+`options/extension_header.yaml`: `create_method`, `version_macro_prefix`, and
+`internal_include` are required; `exclude_functions` is optional. The struct's version
+is derived from the template's newest stable `// vX.Y.Z` region tag, never configured.
 
 Binding generators (for example DuckDB.jl's Julia generator) live with their
 binding, not here, and carry their own configuration. They read the spec through

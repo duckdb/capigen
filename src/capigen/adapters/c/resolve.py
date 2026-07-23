@@ -54,11 +54,11 @@ def _default_banner(prefix: str) -> str:
     )
 
 
-def resolve_c_options(metadata: dict) -> dict[str, str | int]:
+def resolve_c_options(metadata: dict, options: dict | None = None) -> dict:
     """Resolve C-adapter macro names, banner, and the comment column budget."""
     prefix = metadata.get("prefix", "")
     uprefix = prefix.upper()
-    c = metadata.get("options", {}).get("c", {})
+    c = options or {}
     # The legacy `deprecated` field gates with the deprecated state's token.
     # Without an opt_out deprecated state the gate never fires and the token
     # stays empty.
@@ -76,16 +76,25 @@ def resolve_c_options(metadata: dict) -> dict[str, str | int]:
         "no_deprecated_guard": dep_guard,
         "typedef_guard_prefix": c.get("typedef_guard_prefix", f"{uprefix}TYPEDEF_"),
         "banner": c.get("banner", _default_banner(prefix)),
+        "emit_v1_primitive_defs": bool(c.get("emit_v1_primitive_defs", False)),
+        "emit_arrow_defs": bool(c.get("emit_arrow_defs", False)),
+        "emit_extension_api": bool(c.get("emit_extension_api", False)),
     }
 
 
-def resolve_modules(modules: list[dict], metadata: dict) -> list[CModule]:
-    """Transform validated API spec dicts into typed C render objects."""
+def resolve_modules(
+    modules: list[dict], metadata: dict, options: dict | None = None
+) -> list[CModule]:
+    """Transform validated API spec dicts into typed C render objects.
+
+    `options` is the C adapter's options dict; other adapters that only need
+    the function view may omit it.
+    """
     primitives = {p["name"]: p["c_type"] for p in metadata["primitives"]}
     suffixes = metadata["suffixes"]
     prefix = metadata.get("prefix", "")
     states = resolve_states(metadata)
-    c_options = metadata.get("options", {}).get("c", {})
+    c_options = options or {}
     handle_opts = c_options.get("handles", {})
     handle_style = handle_opts.get("default_style", "void_ptr")
     void_ptr_handles = frozenset(

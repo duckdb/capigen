@@ -21,8 +21,12 @@ uv run capigen c --spec-dir /path/to/api_spec -o header.h
 ```
 
 `--spec-dir` points at a directory containing `metadata.yaml` and the module YAMLs.
-The adapter name resolves under `capigen.adapters`; an unknown name lists the
-available adapters.
+Adapter options live in `<spec-dir>/options/<adapter>.yaml` (override with
+`--options PATH`) and are validated against the adapter's own schema before
+generation. The adapter name resolves as a built-in under `capigen.adapters` first,
+then as any importable module exposing `generate()` — the CLI is a thin runner
+(load, validate, dispatch), so an out-of-tree generator can use it instead of
+writing its own entry point.
 
 ```bash
 uv run capigen --version           # package version (e.g. 0.5.0)
@@ -33,8 +37,9 @@ uv run capigen --schema-version    # supported schema version (e.g. 0.5)
 
 ```
 src/capigen/
-  __init__.py          # exposes __version__ and SCHEMA_VERSION
+  __init__.py          # public API: load(), Spec, SpecError, __version__, SCHEMA_VERSION
   __main__.py          # CLI entry point
+  spec.py              # capigen.load(): one-call load + validate, returns Spec
   loader.py            # YAML loading, JSON Schema validation, schema_version check
   validate.py          # cross-module referential integrity checks
   states.py            # lifecycle state vocabulary
@@ -74,12 +79,22 @@ enforced in the spec owner's repository through its spec discipline and CI.
 
 Language bindings (DuckDB.jl's Julia layer, a future Rust binding) are consumers of
 the C ABI, not contracts themselves. Their generators live with the binding and read
-the spec through capigen's public library surface:
+the spec through capigen's public library surface. The front door is one call:
 
-- `capigen.loader.load_metadata` / `load_modules`: parse a spec, apply defaults, check `schema_version`.
-- `capigen.validate.validate_semantics`: cross-module referential and lifecycle checks.
-- `capigen.states.resolve_states` / `current_state`: the lifecycle vocabulary and a construct's current state.
-- `capigen.tools`: name registry (`build_registry`, `apply_prefix`), enum numbering (`resolve_enum_values`), alias chasing (`chase`), version ordering (`version_key`), module ordering.
+```python
+import capigen
+
+spec = capigen.load("path/to/api_spec")  # load + defaults + validation; raises if invalid
+spec.modules          # validated module dicts
+spec.metadata         # validated metadata
+spec.states           # declared lifecycle states
+spec.registry         # spec name -> C name
+spec.latest_version   # the version the spec describes
+```
+
+Below it, the pieces are importable individually: `capigen.states`
+(`resolve_states`, `current_state`) and `capigen.tools` (name registry, enum
+numbering, alias chasing, version ordering, module ordering).
 
 A binding generator pins `capigen~=X.Y` to read specs of that schema line; its
 correctness oracle is the binding's own test suite against the real library.
@@ -112,8 +127,8 @@ def generate(modules: list[dict], metadata: dict, output_path: Path) -> None
 ```
 
 - `modules` is a list of validated spec dicts (defaults applied).
-- `metadata` carries `primitives` (with C ABI type names), `suffixes` (naming conventions per construct), `versions`, `lifecycle_states`, `schema_version`, and any adapter `options`.
-- An in-tree adapter also declares its options namespace in `metadata.schema.json`.
+- `metadata` carries `primitives` (with C ABI type names), `suffixes` (naming conventions per construct), `versions`, `lifecycle_states`, and `schema_version`.
+- Adapter options arrive separately via the `options` keyword argument. An adapter that takes options ships an `options.schema.json` in its directory and exports it as `OPTIONS_SCHEMA`; the CLI validates the options file against it.
 - Adapters may accept extra keyword parameters (e.g. `scan_dir`, `template`, `internal_out`, `invocation`). The CLI passes those a given adapter declares.
 
 In-tree is for contract-defining output (and engine tooling like the bridge). A

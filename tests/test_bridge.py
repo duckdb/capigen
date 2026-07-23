@@ -32,10 +32,13 @@ def _metadata(**bridge_opts):
             {"name": "i32", "c_type": "int32_t"},
         ],
     }
-    opts = {"stub_return": "DUCKDB_V2_ERROR_API"}
-    opts.update(bridge_opts)
-    meta["options"] = {"bridge": opts}
     return meta
+
+
+def _options(**over):
+    opts = {"stub_return": "DUCKDB_V2_ERROR_API"}
+    opts.update(over)
+    return opts
 
 
 def _module():
@@ -60,50 +63,57 @@ def _module():
 
 def test_zero_param_stub_renders_void(tmp_path):
     output = tmp_path / "stubs.cpp"
-    generate([_module()], _metadata(), output)
+    generate([_module()], _metadata(), output, options=_options())
     assert "duckdb_v2_ping(void)" in output.read_text()
 
 
 def test_missing_stub_return_errors_when_stubbing(tmp_path):
     """No universal error value exists; the expression must be configured."""
-    meta = _metadata()
-    del meta["options"]["bridge"]["stub_return"]
-    with pytest.raises(ValueError, match="options.bridge.stub_return"):
-        generate([_module()], meta, tmp_path / "stubs.cpp")
+    with pytest.raises(ValueError, match="stub_return"):
+        generate([_module()], _metadata(), tmp_path / "stubs.cpp")
 
 
 def test_missing_stub_return_ok_when_nothing_to_stub(tmp_path):
     scan_dir = tmp_path / "scan"
     scan_dir.mkdir()
     (scan_dir / "impl.cpp").write_text("int32_t duckdb_v2_ping(void) { return 0; }\n")
-    meta = _metadata()
-    del meta["options"]["bridge"]["stub_return"]
     output = tmp_path / "stubs.cpp"
-    generate([_module()], meta, output, scan_dir=scan_dir)
+    generate([_module()], _metadata(), output, scan_dir=scan_dir)
     assert "// Not yet implemented" not in output.read_text()
 
 
 def test_stub_return_override(tmp_path):
     output = tmp_path / "stubs.cpp"
-    generate([_module()], _metadata(stub_return="MY_ERROR"), output)
+    generate([_module()], _metadata(), output, options=_options(stub_return="MY_ERROR"))
     assert "return MY_ERROR;" in output.read_text()
 
 
 def test_include_emitted_when_set(tmp_path):
     output = tmp_path / "stubs.cpp"
-    generate([_module()], _metadata(include_header="my_internal.hpp"), output)
+    generate(
+        [_module()],
+        _metadata(),
+        output,
+        options=_options(include_header="my_internal.hpp"),
+    )
     assert '#include "my_internal.hpp"' in output.read_text()
 
 
 def test_include_absent_by_default(tmp_path):
     output = tmp_path / "stubs.cpp"
-    generate([_module()], _metadata(), output)
+    generate([_module()], _metadata(), output, options=_options())
     assert "#include" not in output.read_text()
 
 
 def test_invocation_comment(tmp_path):
     output = tmp_path / "stubs.cpp"
-    generate([_module()], _metadata(), output, invocation="capigen bridge -o x.cpp")
+    generate(
+        [_module()],
+        _metadata(),
+        output,
+        invocation="capigen bridge -o x.cpp",
+        options=_options(),
+    )
     assert "// Re-run: capigen bridge -o x.cpp" in output.read_text()
 
 
@@ -112,7 +122,7 @@ def test_scan_prefix_derived_from_metadata(tmp_path):
     scan_dir.mkdir()
     (scan_dir / "impl.cpp").write_text("int32_t duckdb_v2_ping(void) { return 0; }\n")
     output = tmp_path / "stubs.cpp"
-    generate([_module()], _metadata(), output, scan_dir=scan_dir)
+    generate([_module()], _metadata(), output, scan_dir=scan_dir, options=_options())
     # The already-implemented function is detected and no stub is emitted for it.
     assert "// Not yet implemented" not in output.read_text()
 
@@ -120,7 +130,12 @@ def test_scan_prefix_derived_from_metadata(tmp_path):
 def test_unstable_guard_defined_before_include(tmp_path):
     """The stub file is engine-side, so it opts in to the full API surface itself."""
     output = tmp_path / "stubs.cpp"
-    generate([_module()], _metadata(include_header="my_internal.hpp"), output)
+    generate(
+        [_module()],
+        _metadata(),
+        output,
+        options=_options(include_header="my_internal.hpp"),
+    )
     text = output.read_text()
     assert (
         "#ifndef DUCKDB_V2_API_UNSTABLE\n#define DUCKDB_V2_API_UNSTABLE\n#endif" in text
@@ -138,7 +153,7 @@ def test_every_opt_in_guard_defined(tmp_path):
         "experimental": {"visibility": "opt_in", "guard": "G_EXPERIMENTAL"},
     }
     output = tmp_path / "stubs.cpp"
-    generate([_module()], meta, output)
+    generate([_module()], meta, output, options=_options())
     text = output.read_text()
     assert "#define G_UNSTABLE" in text
     assert "#define G_EXPERIMENTAL" in text
@@ -147,7 +162,7 @@ def test_every_opt_in_guard_defined(tmp_path):
 def test_opt_out_guards_not_defined(tmp_path):
     """Defining an opt-out guard would strip deprecated declarations engine-side."""
     output = tmp_path / "stubs.cpp"
-    generate([_module()], _metadata(), output)
+    generate([_module()], _metadata(), output, options=_options())
     assert "DUCKDB_V2_API_NO_DEPRECATED" not in output.read_text()
 
 
@@ -155,7 +170,7 @@ def test_omitted_function_gets_no_stub(tmp_path):
     module = _module()
     module["functions"]["ping"]["lifecycle"] = [["removed", "v1.0.0", "2026-01-01"]]
     output = tmp_path / "stubs.cpp"
-    generate([module], _metadata(), output)
+    generate([module], _metadata(), output, options=_options())
     assert "duckdb_v2_ping" not in output.read_text()
 
 
@@ -164,14 +179,11 @@ def test_stubs_compile_against_generated_header(tmp_path):
     """One generator run's artifacts are consistent: stubs see the guarded declarations."""
     metadata = load_metadata(TESTSPEC_DIR)
     modules = load_modules(TESTSPEC_DIR)
-    metadata.setdefault("options", {})["bridge"] = {
-        "include_header": "duckdb_v2.h",
-        "stub_return": "DUCKDB_V2_API_ERROR",
-    }
+    options = {"include_header": "duckdb_v2.h", "stub_return": "DUCKDB_V2_API_ERROR"}
 
     generate_header(modules, metadata, tmp_path / "duckdb_v2.h")
     stubs = tmp_path / "stubs.cpp"
-    generate(modules, metadata, stubs)
+    generate(modules, metadata, stubs, options=options)
 
     result = subprocess.run(
         ["cc", "-fsyntax-only", "-xc++", "-I", str(tmp_path), str(stubs)],

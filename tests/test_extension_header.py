@@ -20,6 +20,12 @@ from capigen.adapters.extension_header import (
 
 EXT_SPEC = Path(__file__).parent / "testspec" / "ext"
 TEMPLATE = EXT_SPEC / "template.h.in"
+EXT_OPTIONS = {
+    "create_method": "CreateExtAPI",
+    "version_macro_prefix": "EXT_API_VERSION",
+    "internal_include": "ext.h",
+    "exclude_functions": ["skipme"],
+}
 HAS_CC = shutil.which("cc") is not None
 
 
@@ -37,7 +43,14 @@ def _run(tmp_path, template_text=None):
     )
     consumer = tmp_path / "out.h"
     internal = tmp_path / "internal.hpp"
-    generate(modules, metadata, consumer, template=template, internal_out=internal)
+    generate(
+        modules,
+        metadata,
+        consumer,
+        template=template,
+        internal_out=internal,
+        options=EXT_OPTIONS,
+    )
     return consumer.read_text(), internal.read_text()
 
 
@@ -68,14 +81,12 @@ def _run_inline(tmp_path, functions, template_text, exclude=None):
             "stable": {"visibility": "always"},
             "removed": {"visibility": "never"},
         },
-        "options": {
-            "extension": {
-                "create_method": "CreateT",
-                "version_macro_prefix": "T_VERSION",
-                "internal_include": "t.h",
-                "exclude_functions": exclude or [],
-            }
-        },
+    }
+    options = {
+        "create_method": "CreateT",
+        "version_macro_prefix": "T_VERSION",
+        "internal_include": "t.h",
+        "exclude_functions": exclude or [],
     }
     module = {
         "module": "m",
@@ -92,7 +103,14 @@ def _run_inline(tmp_path, functions, template_text, exclude=None):
     template.write_text(template_text)
     consumer = tmp_path / "out.h"
     internal = tmp_path / "i.hpp"
-    generate([module], metadata, consumer, template=template, internal_out=internal)
+    generate(
+        [module],
+        metadata,
+        consumer,
+        template=template,
+        internal_out=internal,
+        options=options,
+    )
     return consumer.read_text(), internal.read_text()
 
 
@@ -338,6 +356,7 @@ class TestVerify:
                 tmp_path / "o.h",
                 template=template,
                 internal_out=tmp_path / "i.hpp",
+                options=EXT_OPTIONS,
             )
 
     def test_static_inline_member_fails(self, tmp_path):
@@ -485,6 +504,7 @@ class TestStatesIntegration:
                 tmp_path / "o.h",
                 template=template,
                 internal_out=tmp_path / "i.hpp",
+                options=EXT_OPTIONS,
             )
 
     def test_omitted_function_is_not_appended(self, tmp_path):
@@ -608,7 +628,14 @@ class TestEmptyAppend:
         template = EXT_SPEC / "template_full.h.in"
         consumer = tmp_path / "out.h"
         internal = tmp_path / "i.hpp"
-        generate(modules, metadata, consumer, template=template, internal_out=internal)
+        generate(
+            modules,
+            metadata,
+            consumer,
+            template=template,
+            internal_out=internal,
+            options=EXT_OPTIONS,
+        )
         # No appends: output is the template verbatim (markers present, regions empty).
         assert consumer.read_text() == template.read_text()
         assert (
@@ -626,6 +653,7 @@ class TestEmptyAppend:
             tmp_path / "o.h",
             template=template,
             internal_out=internal,
+            options=EXT_OPTIONS,
         )
         text = internal.read_text()
         struct = text[text.index("typedef struct") : text.index("} ext_api;")]

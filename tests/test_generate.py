@@ -372,12 +372,12 @@ class TestDescriptionRendering:
 
 
 class TestMacroOptions:
-    """The C adapter's macro names and banner come from options.c."""
+    """The C adapter's macro names and banner come from its options file."""
 
-    def _metadata(self, **c_opts):
-        meta = {
-            "schema_version": "0.2.0",
-            "versions": ["1.0.0"],
+    def _metadata(self):
+        return {
+            "schema_version": "0.5",
+            "versions": ["v1.0.0"],
             "prefix": "duckdb_v2_",
             "suffixes": {"handles": "_ptr", "callbacks": "_cb", "aliases": "_t"},
             "primitives": [
@@ -385,19 +385,10 @@ class TestMacroOptions:
                 {"name": "i32", "c_type": "int32_t"},
             ],
         }
-        if c_opts:
-            meta["options"] = {"c": c_opts}
-        return meta
 
     def _module(self):
         return {
             "module": "m",
-            "handles": {},
-            "callbacks": {},
-            "aliases": {},
-            "structs": {},
-            "enums": {},
-            "constants": {},
             "functions": {
                 "ping": {
                     "return_type": "i32",
@@ -420,12 +411,13 @@ class TestMacroOptions:
         output = tmp_path / "out.h"
         generate(
             [self._module()],
-            self._metadata(
-                export_macro="MY_API",
-                deprecated_macro="MY_DEPRECATED",
-                banner="// custom banner",
-            ),
+            self._metadata(),
             output,
+            options={
+                "export_macro": "MY_API",
+                "deprecated_macro": "MY_DEPRECATED",
+                "banner": "// custom banner",
+            },
         )
         content = output.read_text()
         assert "MY_API" in content
@@ -485,9 +477,9 @@ class TestUnstableGating:
         mod.update(overrides)
         return mod
 
-    def _generate(self, module, metadata, tmp_path):
+    def _generate(self, module, metadata, tmp_path, options=None):
         output = tmp_path / "out.h"
-        generate([module], metadata, output)
+        generate([module], metadata, output, options=options)
         return output.read_text()
 
     def test_unstable_handle_is_guarded(self, tmp_path):
@@ -670,7 +662,10 @@ class TestUnstableGating:
     ):
         module = self._deprecated_module(by_status)
         content = self._generate(
-            module, self._metadata(c={"emit_deprecated_attribute": True}), tmp_path
+            module,
+            self._metadata(),
+            tmp_path,
+            options={"emit_deprecated_attribute": True},
         )
         gated = content.split("#ifndef DUCKDB_V2_API_NO_DEPRECATED", 1)[1]
         gated = gated.split("#endif", 1)[0]
@@ -702,8 +697,9 @@ class TestUnstableGating:
         module = self._module(handles={"scratch": {"lifecycle": UNSTABLE}})
         content = self._generate(
             module,
-            self._metadata(c={"handles": {"default_style": "tagged_struct"}}),
+            self._metadata(),
             tmp_path,
+            options={"handles": {"default_style": "tagged_struct"}},
         )
         assert (
             "#ifdef DUCKDB_V2_API_UNSTABLE\ntypedef struct _duckdb_v2_scratch {"

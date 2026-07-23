@@ -10,6 +10,8 @@ from pathlib import Path
 from ...states import resolve_states
 from ..c.resolve import resolve_modules
 
+OPTIONS_SCHEMA = Path(__file__).parent / "options.schema.json"
+
 
 def _scan_implemented_functions(scan_dir: Path, prefix: str) -> set[str]:
     """Find function names already implemented in .cpp files."""
@@ -35,14 +37,15 @@ def generate(
     output_path: Path,
     scan_dir: Path | None = None,
     invocation: str | None = None,
+    options: dict | None = None,
 ) -> None:
     """Generate C++ stub file for unimplemented V2 C API functions."""
     render_modules = resolve_modules(modules, metadata)
 
     prefix = metadata.get("prefix", "")
-    bridge_opts = metadata.get("options", {}).get("bridge", {})
-    stub_return = bridge_opts.get("stub_return")
-    include = bridge_opts.get("include_header")
+    options = options or {}
+    stub_return = options.get("stub_return")
+    include = options.get("include_header")
 
     implemented = _scan_implemented_functions(scan_dir, prefix) if scan_dir else set()
 
@@ -74,9 +77,7 @@ def generate(
     # No universal error value exists across specs, so the return expression
     # must be configured whenever there is anything to stub.
     if to_stub and not stub_return:
-        raise ValueError(
-            "bridge requires options.bridge.stub_return when stubs are generated"
-        )
+        raise ValueError("bridge requires 'stub_return' when stubs are generated")
 
     for fname, func in to_stub:
         params = [f"{param.c_decl} {pname}" for pname, param in func.parameters.items()]

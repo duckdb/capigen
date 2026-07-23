@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:capigen:options:bridge",
+  "description": "Bridge (C++ stub) adapter options.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "stub_return": {
+      "description": "Expression every generated stub returns.",
+      "type": "string"
+    },
+    "include_header": {
+      "description": "Header the stub file includes.",
+      "type": "string"
+    }
+  }
+}

@@ -8,11 +8,18 @@ from .comments import doc, prefixed
 from .resolve import resolve_c_options, resolve_modules
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+OPTIONS_SCHEMA = Path(__file__).parent / "options.schema.json"
 
 
-def generate(modules: list[dict], metadata: dict, output_path: Path) -> None:
-    render_modules = resolve_modules(modules, metadata)
-    c_opts = resolve_c_options(metadata)
+def generate(
+    modules: list[dict],
+    metadata: dict,
+    output_path: Path,
+    options: dict | None = None,
+) -> None:
+    options = options or {}
+    render_modules = resolve_modules(modules, metadata, options)
+    c_opts = resolve_c_options(metadata, options)
     width = int(c_opts["comment_width"])
 
     def _c_doc(description: str, indent: str = "") -> str:
@@ -30,7 +37,7 @@ def generate(modules: list[dict], metadata: dict, output_path: Path) -> None:
     template = env.get_template("header.h.j2")
     output = template.render(
         modules=render_modules,
-        metadata=metadata,
+        primitives=metadata.get("primitives", []),
         c_opts=c_opts,
     )
 

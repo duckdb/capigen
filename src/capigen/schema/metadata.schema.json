@@ -23,7 +23,8 @@
         "type": "string",
         "pattern": "^v\\d+\\.\\d+\\.\\d+$"
       },
-      "uniqueItems": true
+      "uniqueItems": true,
+      "minItems": 1
     },
     "suffixes": {
       "description": "ABI naming suffixes applied to each construct type. Every adapter uses these to compute canonical names.",
@@ -61,22 +62,6 @@
       "description": "String prepended to all generated C identifiers (types, functions, constants). E.g. 'duckdb_v2_' yields 'duckdb_v2_open'; uppercase form used for constants/enum values.",
       "type": "string"
     },
-    "options": {
-      "description": "Adapter-specific rendering options, keyed by adapter name. Each adapter reads its own namespace.",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "c": {
-          "$ref": "#/$defs/COptions"
-        },
-        "bridge": {
-          "$ref": "#/$defs/BridgeOptions"
-        },
-        "extension": {
-          "$ref": "#/$defs/ExtensionOptions"
-        }
-      }
-    },
     "lifecycle_states": {
       "description": "The lifecycle states constructs can be in, and how each renders. Only declared states exist; a construct's 'lifecycle' entries must name them.",
       "type": "object",
@@ -89,137 +74,6 @@
     }
   },
   "$defs": {
-    "COptions": {
-      "description": "C header adapter options.",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "comment_width": {
-          "description": "Column budget deciding a one-line //! comment vs a /*! */ block.",
-          "type": "integer",
-          "minimum": 1
-        },
-        "deprecated_macro": {
-          "description": "Attribute macro name used when emit_deprecated_attribute is on.",
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-        },
-        "emit_deprecated_attribute": {
-          "description": "Put the deprecated attribute macro on deprecated function declarations.",
-          "type": "boolean"
-        },
-        "typedef_guard_prefix": {
-          "description": "Prefix of the include-guard macros around qualified-alias typedefs.",
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-        },
-        "banner": {
-          "description": "Verbatim banner at the top of the generated header.",
-          "type": "string"
-        },
-        "handles": {
-          "description": "Handle rendering style. Changing a style is an ABI break.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "default_style": {
-              "type": "string",
-              "enum": [
-                "void_ptr",
-                "tagged_struct"
-              ]
-            },
-            "override_style": {
-              "type": "object",
-              "propertyNames": {
-                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-              },
-              "additionalProperties": {
-                "type": "string",
-                "enum": [
-                  "void_ptr",
-                  "tagged_struct"
-                ]
-              }
-            }
-          }
-        },
-        "emit_enum_max_member": {
-          "description": "Append the int-max sentinel to every enum. Default true.",
-          "type": "boolean"
-        },
-        "emit_v1_primitive_defs": {
-          "description": "Emit the hand-rolled V1 preamble definitions.",
-          "type": "boolean"
-        },
-        "emit_arrow_defs": {
-          "description": "Emit the Arrow C Data Interface struct definitions in the preamble.",
-          "type": "boolean"
-        },
-        "emit_extension_api": {
-          "description": "Emit the duckdb_extension_access struct.",
-          "type": "boolean"
-        },
-        "export_macro": {
-          "description": "Export/visibility macro on every function declaration.",
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-        },
-        "extension_export_macro": {
-          "description": "Export macro for extension entrypoints.",
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-        }
-      }
-    },
-    "BridgeOptions": {
-      "description": "Bridge (C++ stub) adapter options.",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "stub_return": {
-          "description": "Expression every generated stub returns.",
-          "type": "string"
-        },
-        "include_header": {
-          "description": "Header the stub file includes.",
-          "type": "string"
-        }
-      }
-    },
-    "ExtensionOptions": {
-      "description": "Extension function-pointer-struct adapter options.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "create_method",
-        "version_macro_prefix",
-        "internal_include"
-      ],
-      "properties": {
-        "create_method": {
-          "description": "Name of the engine-side function that fills the struct.",
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-        },
-        "version_macro_prefix": {
-          "description": "Prefix of the engine-side version define macros.",
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-        },
-        "internal_include": {
-          "description": "Header the engine-side output includes.",
-          "type": "string"
-        },
-        "exclude_functions": {
-          "description": "Spec functions kept out of the struct, by bare unprefixed name.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
     "StateDefinition": {
       "description": "When constructs in this state are emitted. always: unconditionally. opt_in: behind #ifdef guard. opt_out: behind #ifndef guard. never: not emitted at all. The guard is the macro token for the gated modes.",
       "type": "object",

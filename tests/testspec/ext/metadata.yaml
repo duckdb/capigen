@@ -23,10 +23,3 @@ primitives:
 lifecycle_states:
   unstable: {visibility: opt_in, guard: EXT_API_UNSTABLE}
   stable: {visibility: always}
-options:
-  extension:
-    create_method: CreateExtAPI
-    version_macro_prefix: EXT_API_VERSION
-    internal_include: ext.h
-    exclude_functions:
-      - skipme

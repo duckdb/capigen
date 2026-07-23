@@ -23,6 +23,7 @@ from ..c.render import CFunction
 from ..c.resolve import resolve_modules
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+OPTIONS_SCHEMA = Path(__file__).parent / "options.schema.json"
 
 _BEGIN = "// capigen:begin appended"
 _END = "// capigen:end appended"
@@ -330,6 +331,7 @@ def generate(
     template: Path | None = None,
     internal_out: Path | None = None,
     invocation: str | None = None,
+    options: dict | None = None,
 ) -> None:
     """Verify the template struct against the spec, then write both lockstep headers."""
     if template is None:
@@ -337,7 +339,12 @@ def generate(
     if internal_out is None:
         raise ValueError("extension_header adapter requires --internal-out")
 
-    opts = metadata.get("options", {}).get("extension", {})
+    opts = options or {}
+    if not opts:
+        raise ValueError(
+            "extension_header requires an options file (create_method, "
+            "version_macro_prefix, internal_include)"
+        )
     # Appended members are unstable by position, gated by the unstable state's guard.
     unstable = resolve_states(metadata).get("unstable")
     if unstable is None or unstable.visibility != "opt_in" or not unstable.guard:
