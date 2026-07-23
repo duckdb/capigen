@@ -44,7 +44,6 @@ def _run(tmp_path, template_text=None):
 def _fn(ret="i32", params=None, static_inline=False):
     """Build a minimal spec function dict."""
     return {
-        "summary": "x",
         "return_type": ret,
         "return_pointer": 0,
         "return_const": False,

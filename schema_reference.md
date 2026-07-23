@@ -13,22 +13,22 @@ targets.
 
 ```yaml
 # metadata.yaml
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.4.0/src/capigen/schema/metadata.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.5.0/src/capigen/schema/metadata.schema.json
 ```
 
 ```yaml
 # a module file
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.4.0/src/capigen/schema/module.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.5.0/src/capigen/schema/module.schema.json
 ```
 
 Every schema change is at least a minor bump, so all patch tags in a `MAJOR.MINOR` line
-carry the same schema. Pin to the first tag of the line: `v0.4.0` for schema `0.4`.
+carry the same schema. Pin to the first tag of the line: `v0.5.0` for schema `0.5`.
 
 `raw.githubusercontent.com` serves the same files if you would rather not depend on
 jsDelivr. Keep the path, change the host:
 
 ```
-https://raw.githubusercontent.com/duckdb/capigen/v0.4.0/src/capigen/schema/module.schema.json
+https://raw.githubusercontent.com/duckdb/capigen/v0.5.0/src/capigen/schema/module.schema.json
 ```
 
 ## Two conventions first
@@ -317,7 +317,7 @@ API function declarations.
 ```yaml
 functions:
   open:
-    summary: Open a database at the given path.
+    description: Open a database at the given path.
     role: constructor
     belongs_to: database
     parameters:
@@ -337,7 +337,6 @@ functions:
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `summary` | yes | none | One-line description. Used in the generated doc comment. |
 | `role` | no | `method` | One of `constructor`, `destructor`, `getter`, `setter`, `method`. |
 | `belongs_to` | no | none | The type this function operates on. |
 | `parameters` | no | `{}` | Map of parameter name to Parameter. Order sets the signature. |

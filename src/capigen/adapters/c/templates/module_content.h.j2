@@ -100,15 +100,9 @@
 {% if func.deprecated %}
 #ifndef {{ c_opts.no_deprecated_guard }}
 {% endif %}
-  {%- if func.summary or func.description -%}
+  {%- if func.description -%}
 /*!
-    {% if func.summary %}
-{{ func.summary | c_lines(" * ") }}
-    {% endif %}
-    {% if func.description %}
-{% if func.summary %} *
-{% endif %}{{ func.description | c_lines(" * ") }}
-    {% endif %}
+{{ func.description | c_lines(" * ") }}
  *
     {% for param_name, param in func.parameters.items() %}
 {{ ("@param " ~ param_name ~ " " ~ (param.description or '')) | c_lines(" * ") }}

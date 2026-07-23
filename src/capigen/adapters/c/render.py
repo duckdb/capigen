@@ -82,7 +82,6 @@ class CParam:
 @dataclass
 class CFunction:
     name: str
-    summary: str | None
     description: str | None
     deprecated: str | None
     return_c: str

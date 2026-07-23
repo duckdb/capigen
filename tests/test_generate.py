@@ -236,7 +236,6 @@ class TestDescriptionRendering:
         self, handle_description="A connection\nto a database.", **func_overrides
     ):
         func = {
-            "summary": "Pings the database.",
             "return_type": "i32",
             "return_pointer": 0,
             "return_const": False,
@@ -350,7 +349,6 @@ class TestMacroOptions:
             "error_groups": {},
             "functions": {
                 "ping": {
-                    "summary": "Ping",
                     "return_type": "i32",
                     "return_pointer": 0,
                     "return_const": False,
@@ -521,7 +519,6 @@ class TestUnstableGating:
         module = self._module(
             functions={
                 "poke": {
-                    "summary": "Pokes.",
                     "return_type": "i32",
                     "return_pointer": 0,
                     "return_const": False,
@@ -598,7 +595,6 @@ class TestUnstableGating:
         module = self._module(
             functions={
                 "old_poke": {
-                    "summary": "Pokes.",
                     "return_type": "i32",
                     "return_pointer": 0,
                     "return_const": False,

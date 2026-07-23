@@ -26,7 +26,7 @@ constants:
     value: 0xFFFFFFFF
 functions:
   open:
-    summary: "Opens a database."
+    description: "Opens a database."
     return_type: API_CALL
     return_pointer: 0
     return_const: false
@@ -45,7 +45,7 @@ functions:
         const: false
         kind: OUT
   close:
-    summary: "Closes a database."
+    description: "Closes a database."
     return_type: API_CALL
     return_pointer: 0
     return_const: false
@@ -59,7 +59,7 @@ functions:
         indirection: 1
         const: false
   scratch_create:
-    summary: "Creates a scratch buffer."
+    description: "Creates a scratch buffer."
     status:
       - ["unstable", "v1.0.0", "2026-01-01"]
     return_type: API_CALL

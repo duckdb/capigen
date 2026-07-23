@@ -14,7 +14,6 @@ aliases:
     description: Alias for the KIND enum
 functions:
   open:
-    summary: Open a database.
     return_type: i32
     return_pointer: 0
     return_const: false
@@ -28,7 +27,6 @@ functions:
         indirection: 1
         const: false
   close:
-    summary: Close a database.
     return_type: void
     return_pointer: 0
     return_const: false
@@ -38,13 +36,11 @@ functions:
         indirection: 0
         const: false
   version:
-    summary: Library version.
     return_type: char
     return_pointer: 1
     return_const: true
     parameters: {}
   flush:
-    summary: Flush a database.
     return_type: i32
     return_pointer: 0
     return_const: false
@@ -54,7 +50,6 @@ functions:
         indirection: 0
         const: false
   get_kind:
-    summary: Get the kind.
     return_type: KIND
     return_pointer: 0
     return_const: false
@@ -64,7 +59,6 @@ functions:
         indirection: 0
         const: false
   skipme:
-    summary: Excluded from the struct.
     return_type: void
     return_pointer: 0
     return_const: false
@@ -74,7 +68,6 @@ functions:
         indirection: 0
         const: false
   extra_one:
-    summary: Appended function one.
     return_type: void
     return_pointer: 0
     return_const: false
@@ -84,7 +77,6 @@ functions:
         indirection: 0
         const: false
   extra_two:
-    summary: Appended function two, zero parameters.
     return_type: i32
     return_pointer: 0
     return_const: false

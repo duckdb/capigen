@@ -17,7 +17,6 @@ def test_handle_dependencies_no_deps(make_module):
         handles={"duckdb_v2_a": {"description": ""}},
         functions={
             "duckdb_v2_a_create": {
-                "summary": "",
                 "role": "constructor",
                 "belongs_to": "duckdb_v2_a",
                 "parameters": {
@@ -44,7 +43,6 @@ def test_handle_dependencies_single_edge(make_module):
         },
         functions={
             "duckdb_v2_b_from_a": {
-                "summary": "",
                 "role": "constructor",
                 "belongs_to": "duckdb_v2_b",
                 "parameters": {
@@ -70,7 +68,6 @@ def test_handle_dependencies_ignores_self(make_module):
         handles={"duckdb_v2_a": {"description": ""}},
         functions={
             "duckdb_v2_a_destroy": {
-                "summary": "",
                 "role": "destructor",
                 "belongs_to": "duckdb_v2_a",
                 "parameters": {"a": {"type": "duckdb_v2_a", "indirection": 1}},
@@ -91,7 +88,6 @@ def test_topo_sort_preserves_dependency_order(make_module):
         },
         functions={
             "duckdb_v2_conn_create": {
-                "summary": "",
                 "role": "constructor",
                 "belongs_to": "duckdb_v2_conn",
                 "parameters": {
@@ -137,13 +133,11 @@ def test_topo_sort_detects_cycle(make_module):
         },
         functions={
             "duckdb_v2_a_needs_b": {
-                "summary": "",
                 "belongs_to": "duckdb_v2_a",
                 "parameters": {"b": {"type": "duckdb_v2_b"}},
                 "return_type": "DUCKDB_V2_API_CALL",
             },
             "duckdb_v2_b_needs_a": {
-                "summary": "",
                 "belongs_to": "duckdb_v2_b",
                 "parameters": {"a": {"type": "duckdb_v2_a"}},
                 "return_type": "DUCKDB_V2_API_CALL",

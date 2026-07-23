@@ -483,7 +483,6 @@ class TestResolveFunctions:
                 "m",
                 functions={
                     "do_thing": {
-                        "summary": "Does a thing",
                         "description": "Longer description",
                         "return_type": "i32",
                         "return_pointer": 0,
@@ -507,7 +506,6 @@ class TestResolveFunctions:
         result = resolve_modules(modules, metadata)
         f = result[0].functions["do_thing"]
         assert isinstance(f, CFunction)
-        assert f.summary == "Does a thing"
         assert f.description == "Longer description"
         assert f.return_c == "int32_t"
         assert isinstance(f.parameters["name"], CParam)
@@ -520,7 +518,6 @@ class TestResolveFunctions:
                 "m",
                 functions={
                     "get_value": {
-                        "summary": "Get a value",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -546,7 +543,6 @@ class TestResolveFunctions:
                 "m",
                 functions={
                     "get_str": {
-                        "summary": "Get a string",
                         "return_type": "char",
                         "return_pointer": 1,
                         "return_const": True,
@@ -564,7 +560,6 @@ class TestResolveFunctions:
                 "m",
                 functions={
                     "noop": {
-                        "summary": "No-op",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -582,7 +577,6 @@ class TestResolveFunctions:
                 "m",
                 functions={
                     "old_func": {
-                        "summary": "Old",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -601,7 +595,6 @@ class TestResolveFunctions:
                 "m",
                 functions={
                     "f": {
-                        "summary": "x",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -626,7 +619,6 @@ class TestResolveFunctions:
                 "m",
                 functions={
                     "bad": {
-                        "summary": "x",
                         "return_type": "nonexistent",
                         "return_pointer": 0,
                         "return_const": False,
@@ -778,7 +770,6 @@ class TestResolveModule:
                 "api",
                 functions={
                     "use_handle": {
-                        "summary": "x",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -907,7 +898,6 @@ class TestUnstableStatus:
                 "m",
                 functions={
                     "f": {
-                        "summary": "x",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,

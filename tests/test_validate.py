@@ -18,7 +18,6 @@ class TestDuplicateDetection:
                 "a",
                 functions={
                     "duckdb_v2_do_thing": {
-                        "summary": "x",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -30,7 +29,6 @@ class TestDuplicateDetection:
                 "b",
                 functions={
                     "duckdb_v2_do_thing": {
-                        "summary": "y",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -175,7 +173,6 @@ class TestFunctionValidation:
                 "m",
                 functions={
                     "duckdb_v2_func": {
-                        "summary": "test",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -199,7 +196,6 @@ class TestFunctionValidation:
                 "m",
                 functions={
                     "duckdb_v2_func": {
-                        "summary": "test",
                         "return_type": "missing",
                         "return_pointer": 0,
                         "return_const": False,
@@ -217,7 +213,6 @@ class TestFunctionValidation:
                 "m",
                 functions={
                     "duckdb_v2_func": {
-                        "summary": "test",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -236,7 +231,6 @@ class TestFunctionValidation:
                 "m",
                 functions={
                     "duckdb_v2_func": {
-                        "summary": "test",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -255,7 +249,6 @@ class TestFunctionValidation:
                 "m",
                 functions={
                     "duckdb_v2_func": {
-                        "summary": "test",
                         "return_type": "i32",
                         "return_pointer": 0,
                         "return_const": False,
@@ -275,7 +268,6 @@ UNSTABLE = [["unstable", "v1.0.0", "2026-01-01"]]
 
 def _func(**overrides):
     func = {
-        "summary": "test",
         "return_type": "i32",
         "return_pointer": 0,
         "return_const": False,

@@ -41,7 +41,6 @@ def _module():
         "error_groups": {},
         "functions": {
             "ping": {
-                "summary": "Ping",
                 "return_type": "i32",
                 "return_pointer": 0,
                 "return_const": False,

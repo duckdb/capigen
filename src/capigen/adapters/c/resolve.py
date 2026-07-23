@@ -433,7 +433,6 @@ def _resolve_function(
 
     return CFunction(
         name=fname,
-        summary=func.get("summary") or None,
         description=func.get("description") or None,
         deprecated=deprecated,
         return_c=return_c,

@@ -31,7 +31,7 @@ class TestPropertyNameValidation:
             ("constants", {"DUCKDB_MAX": {"value": 42}}),
             (
                 "functions",
-                {"duckdb_open": {"summary": "test"}},
+                {"duckdb_open": {"description": "test"}},
             ),
         ],
     )
@@ -50,7 +50,7 @@ class TestPropertyNameValidation:
             ("constants", {"DUCKDB_V2_MAX": {"value": 42}}),
             (
                 "functions",
-                {"duckdb_v2_open": {"summary": "test"}},
+                {"duckdb_v2_open": {"description": "test"}},
             ),
         ],
     )
@@ -72,6 +72,19 @@ class TestPropertyNameValidation:
         mod = _minimal_module(**{construct: entry})
         with pytest.raises(jsonschema.ValidationError, match="does not match"):
             jsonschema.validate(mod, SCHEMA)
+
+
+class TestSummaryRemoved:
+    """description is the only doc field; the old summary field is rejected."""
+
+    def test_summary_rejected(self):
+        mod = _minimal_module(functions={"duckdb_v2_open": {"summary": "gone"}})
+        with pytest.raises(jsonschema.ValidationError, match="summary"):
+            jsonschema.validate(mod, SCHEMA)
+
+    def test_function_without_doc_fields_accepted(self):
+        mod = _minimal_module(functions={"duckdb_v2_open": {}})
+        jsonschema.validate(mod, SCHEMA)  # should not raise
 
 
 class TestQualifiedAliases:
@@ -103,7 +116,6 @@ class TestParameterKind:
         return _minimal_module(
             functions={
                 "duckdb_v2_f": {
-                    "summary": "x",
                     "parameters": {
                         "p": {
                             "type": "char",
@@ -131,7 +143,6 @@ class TestParameterKind:
         mod = _minimal_module(
             functions={
                 "duckdb_v2_f": {
-                    "summary": "x",
                     "parameters": {"p": {"type": "char", "indirection": 1}},
                 }
             }
