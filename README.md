@@ -40,6 +40,7 @@ src/capigen/
   __init__.py          # public API: load(), Spec, SpecError, __version__, SCHEMA_VERSION
   __main__.py          # CLI entry point
   spec.py              # capigen.load(): one-call load + validate, returns Spec
+  anchors.py           # [[name]] cross-references in descriptions
   loader.py            # YAML loading, JSON Schema validation, schema_version check
   validate.py          # cross-module referential integrity checks
   states.py            # lifecycle state vocabulary

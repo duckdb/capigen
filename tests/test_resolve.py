@@ -8,6 +8,7 @@ import pytest
 
 from capigen.adapters.c.resolve import (
     add_enum_sentinels,
+    rewrite_doc_anchors,
     resolve_c_options,
     resolve_modules,
     _format_c_type,
@@ -1057,3 +1058,136 @@ class TestEnumMaxSentinel:
             self._enum(
                 metadata, make_module, {"MODE": {"values": {"MODE_MAX_ENUM": {}}}}
             )
+
+
+class TestAnchorRewriting:
+    """[[name]] in a description becomes the generated C name."""
+
+    def _resolve(self, modules, metadata, anchors=True):
+        render = resolve_modules(modules, metadata)
+        if anchors:
+            rewrite_doc_anchors(render, modules, metadata)
+        return render[0]
+
+    def _func(self, description=None, parameters=None):
+        return {
+            "description": description,
+            "return_type": "i32",
+            "return_pointer": 0,
+            "return_const": False,
+            "parameters": parameters or {},
+        }
+
+    def test_handle_anchor_renders_canonical_name(self, metadata, make_module):
+        metadata["prefix"] = "lib_"
+        modules = [
+            make_module(
+                "m",
+                handles={"conn": {}},
+                functions={"go": self._func("Uses [[conn]].")},
+            )
+        ]
+        fn = self._resolve(modules, metadata).functions["lib_go"]
+        assert fn.description == "Uses lib_conn_ptr."
+
+    def test_resolve_leaves_anchors_raw(self, metadata, make_module):
+        """Shared resolution never rewrites; only the C post-step does."""
+        modules = [
+            make_module(
+                "m",
+                handles={"conn": {}},
+                functions={"go": self._func("Uses [[conn]].")},
+            )
+        ]
+        fn = self._resolve(modules, metadata, anchors=False).functions["go"]
+        assert fn.description == "Uses [[conn]]."
+
+    def test_function_anchor_gets_call_parens(self, metadata, make_module):
+        metadata["prefix"] = "lib_"
+        modules = [
+            make_module(
+                "m",
+                handles={"conn": {"description": "Close with [[close]]."}},
+                functions={"close": self._func()},
+            )
+        ]
+        h = self._resolve(modules, metadata).types[0]
+        assert h.description == "Close with lib_close()."
+
+    def test_constant_anchor_is_macro_case(self, metadata, make_module):
+        metadata["prefix"] = "lib_"
+        modules = [
+            make_module(
+                "m",
+                constants={"MAX_DEPTH": {"value": 8}},
+                handles={"conn": {"description": "At most [[MAX_DEPTH]]."}},
+            )
+        ]
+        h = self._resolve(modules, metadata).types[0]
+        assert h.description == "At most LIB_MAX_DEPTH."
+
+    def test_qualified_alias_anchor_is_verbatim(self, metadata, make_module):
+        metadata["prefix"] = "lib_"
+        modules = [
+            make_module(
+                "m",
+                aliases={"idx_t": {"underlying": "u64", "qualified": True}},
+                handles={"conn": {"description": "Indexed by [[idx_t]]."}},
+            )
+        ]
+        h = self._resolve(modules, metadata).types[0]
+        assert h.description == "Indexed by idx_t."
+
+    def test_nested_sites_are_rewritten(self, metadata, make_module):
+        metadata["prefix"] = "lib_"
+        modules = [
+            make_module(
+                "m",
+                handles={"conn": {}},
+                structs={
+                    "box": {
+                        "fields": [
+                            {
+                                "name": "c",
+                                "type": "i32",
+                                "description": "A [[conn]] count.",
+                            }
+                        ]
+                    }
+                },
+                enums={
+                    "MODE": {"values": {"A": {"description": "Like [[conn]]."}}},
+                },
+                functions={
+                    "go": self._func(
+                        parameters={
+                            "x": {
+                                "type": "i32",
+                                "indirection": 0,
+                                "const": False,
+                                "description": "See [[conn]].",
+                            }
+                        }
+                    )
+                },
+            )
+        ]
+        mod = self._resolve(modules, metadata)
+        assert mod.structs[0].fields[0].description == "A lib_conn_ptr count."
+        assert mod.enums[0].values["LIB_A"].description == "Like lib_conn_ptr."
+        assert (
+            mod.functions["lib_go"].parameters["x"].description == "See lib_conn_ptr."
+        )
+
+    def test_unknown_anchor_raises(self, metadata, make_module):
+        modules = [make_module("m", handles={"conn": {"description": "See [[nope]]."}})]
+        with pytest.raises(ValueError, match=r"anchor '\[\[nope\]\]' does not resolve"):
+            self._resolve(modules, metadata)
+
+    def test_prose_brackets_pass_through(self, metadata, make_module):
+        """The rewriter only touches well-formed anchors; validation owns syntax."""
+        modules = [
+            make_module("m", handles={"conn": {"description": "A [[0, 1]] range."}})
+        ]
+        h = self._resolve(modules, metadata).types[0]
+        assert h.description == "A [[0, 1]] range."

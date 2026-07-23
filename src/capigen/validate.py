@@ -1,8 +1,20 @@
 """Language-agnostic cross-module referential integrity checks."""
 
+from .anchors import find_anchors, find_malformed
 from .states import current_state, resolve_states
 
 _STATE_BEARING = ("handles", "callbacks", "aliases", "structs", "enums", "functions")
+
+
+def _walk_fields(context: str, fields: list, visit) -> None:
+    """Call `visit(context, node)` on every field and union member, recursively."""
+    for f in fields:
+        fctx = f"{context}.{f['name']}"
+        visit(fctx, f)
+        for m in f.get("union", []):
+            visit(f"{fctx}.{m['name']}", m)
+            _walk_fields(f"{fctx}.{m['name']}", m["fields"], visit)
+        _walk_fields(fctx, f.get("fields", []), visit)
 
 
 def validate_semantics(modules: list[dict], metadata: dict) -> list[str]:
@@ -13,9 +25,11 @@ def validate_semantics(modules: list[dict], metadata: dict) -> list[str]:
     versions = set(metadata["versions"])
     prefix = metadata.get("prefix", "")
 
-    # Pass 1: collect all declared constructs, detect duplicates
+    # Pass 1: collect all declared constructs. A bare name is unique across
+    # every construct kind, so a name identifies exactly one construct.
     all_types: dict[str, str] = {}  # name → module
     all_functions: dict[str, str] = {}
+    declared: dict[str, str] = {}  # every kind, for duplicate detection
 
     for mod in modules:
         module_name = mod["module"]
@@ -26,22 +40,20 @@ def validate_semantics(modules: list[dict], metadata: dict) -> list[str]:
             "aliases",
             "structs",
             "enums",
+            "constants",
+            "functions",
         ):
             for name in mod.get(construct, {}):
-                if name in all_types:
+                if name in declared:
                     errors.append(
-                        f"{module_name}::{name}: Type name '{name}' is duplicated "
-                        f"(first in '{all_types[name]}')"
+                        f"{module_name}::{name}: Name '{name}' is duplicated "
+                        f"(first in '{declared[name]}')"
                     )
-                all_types[name] = module_name
-
-        for func_name in mod.get("functions", {}):
-            if func_name in all_functions:
-                errors.append(
-                    f"{module_name}::{func_name}: Function name '{func_name}' is duplicated "
-                    f"(first in '{all_functions[func_name]}')"
-                )
-            all_functions[func_name] = module_name
+                declared[name] = module_name
+                if construct == "functions":
+                    all_functions[name] = module_name
+                elif construct != "constants":
+                    all_types[name] = module_name
 
     def is_valid_type(name: str) -> bool:
         return name in primitives or name in all_types
@@ -56,22 +68,14 @@ def validate_semantics(modules: list[dict], metadata: dict) -> list[str]:
                     f"{module_name}::{name}: Unknown underlying type '{a['underlying']}'"
                 )
 
-        def check_fields(struct_name: str, fields: list, mod_name: str) -> None:
-            """Validate leaf field types; recurse into nested struct/union fields."""
-            for f in fields:
-                if "union" in f:
-                    for m in f["union"]:
-                        check_fields(struct_name, m["fields"], mod_name)
-                elif "fields" in f:
-                    check_fields(struct_name, f["fields"], mod_name)
-                elif not is_valid_type(f["type"]):
-                    errors.append(
-                        f"{mod_name}::{struct_name}.{f['name']}: "
-                        f"Unknown field type '{f['type']}'"
-                    )
+        def check_field_type(fctx: str, node: dict) -> None:
+            if "type" in node and not is_valid_type(node["type"]):
+                errors.append(f"{fctx}: Unknown field type '{node['type']}'")
 
         for name, s in mod.get("structs", {}).items():
-            check_fields(name, s.get("fields", []), module_name)
+            _walk_fields(
+                f"{module_name}::{name}", s.get("fields", []), check_field_type
+            )
 
         for name, cb in mod.get("callbacks", {}).items():
             if not is_valid_type(cb["return_type"]):
@@ -177,16 +181,6 @@ def validate_semantics(modules: list[dict], metadata: dict) -> list[str]:
                 "while the referrer is present"
             )
 
-    def check_fields_refs(context: str, referrer_cons, fields: list) -> None:
-        for f in fields:
-            if "union" in f:
-                for m in f["union"]:
-                    check_fields_refs(context, referrer_cons, m["fields"])
-            elif "fields" in f:
-                check_fields_refs(context, referrer_cons, f["fields"])
-            else:
-                check_type_ref(f"{context}.{f['name']}", referrer_cons, f["type"])
-
     for mod in modules:
         module_name = mod["module"]
 
@@ -216,9 +210,13 @@ def validate_semantics(modules: list[dict], metadata: dict) -> list[str]:
             check_type_ref(f"{module_name}::{name}", emission(a), a["underlying"])
 
         for name, s in mod.get("structs", {}).items():
-            check_fields_refs(
-                f"{module_name}::{name}", emission(s), s.get("fields", [])
-            )
+            cons = emission(s)
+
+            def check_field_ref(fctx: str, node: dict, cons=cons) -> None:
+                if "type" in node:
+                    check_type_ref(fctx, cons, node["type"])
+
+            _walk_fields(f"{module_name}::{name}", s.get("fields", []), check_field_ref)
 
         for name, cb in mod.get("callbacks", {}).items():
             cons = emission(cb)
@@ -232,5 +230,64 @@ def validate_semantics(modules: list[dict], metadata: dict) -> list[str]:
                 check_type_ref(f"{module_name}::{func_name}", cons, func["return_type"])
             for pname, p in func.get("parameters", {}).items():
                 check_type_ref(f"{module_name}::{func_name}.{pname}", cons, p["type"])
+
+    # Pass 5: description anchors. Every [[name]] resolves to a declared
+    # construct, and never to one that no guard configuration emits.
+    anchor_decl: dict[str, dict] = {**type_decl, **function_decl}
+    for mod in modules:
+        anchor_decl.update(mod.get("constants", {}))
+
+    def check_anchors(context: str, text: str | None) -> None:
+        for bad in find_malformed(text):
+            errors.append(
+                f"{context}: malformed anchor '[[{bad}]]' (double brackets are "
+                "reserved for anchors, and the content is not a valid name)"
+            )
+        for a in find_anchors(text):
+            target = anchor_decl.get(a)
+            if target is None:
+                errors.append(f"{context}: unknown anchor '[[{a}]]'")
+                continue
+            sname = current_state(target)
+            state = states.get(sname) if sname else None
+            if state is not None and state.visibility == "never":
+                errors.append(
+                    f"{context}: anchor '[[{a}]]' targets a construct "
+                    f"(state '{sname}') that is never emitted"
+                )
+
+    def check_field_anchor(fctx: str, node: dict) -> None:
+        check_anchors(fctx, node.get("description"))
+
+    for mod in modules:
+        module_name = mod["module"]
+
+        for construct in ("handles", "aliases", "constants"):
+            for name, d in mod.get(construct, {}).items():
+                check_anchors(f"{module_name}::{name}", d.get("description"))
+
+        for name, cb in mod.get("callbacks", {}).items():
+            check_anchors(f"{module_name}::{name}", cb.get("description"))
+            for pname, p in cb.get("parameters", {}).items():
+                check_anchors(f"{module_name}::{name}.{pname}", p.get("description"))
+
+        for name, s in mod.get("structs", {}).items():
+            check_anchors(f"{module_name}::{name}", s.get("description"))
+            _walk_fields(
+                f"{module_name}::{name}", s.get("fields", []), check_field_anchor
+            )
+
+        for name, e in mod.get("enums", {}).items():
+            check_anchors(f"{module_name}::{name}", e.get("description"))
+            for vname, v in e.get("values", {}).items():
+                check_anchors(f"{module_name}::{name}.{vname}", v.get("description"))
+
+        for func_name, func in mod.get("functions", {}).items():
+            check_anchors(f"{module_name}::{func_name}", func.get("description"))
+            check_anchors(f"{module_name}::{func_name}", func.get("return_description"))
+            for pname, p in func.get("parameters", {}).items():
+                check_anchors(
+                    f"{module_name}::{func_name}.{pname}", p.get("description")
+                )
 
     return errors

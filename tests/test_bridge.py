@@ -175,6 +175,15 @@ def test_survives_sentinel_named_enum_member(tmp_path):
     assert "duckdb_v2_ping" in output.read_text()
 
 
+def test_survives_unresolvable_anchor(tmp_path):
+    """Anchor rewriting is C-adapter policy; bridge renders no descriptions."""
+    module = _module()
+    module["handles"] = {"conn": {"description": "See [[typo]]."}}
+    output = tmp_path / "stubs.cpp"
+    generate([module], _metadata(), output, options=_options())
+    assert "duckdb_v2_ping" in output.read_text()
+
+
 def test_omitted_function_gets_no_stub(tmp_path):
     module = _module()
     module["functions"]["ping"]["lifecycle"] = [["removed", "v1.0.0", "2026-01-01"]]

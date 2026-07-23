@@ -39,6 +39,16 @@ out of the per-construct tables below.
 **`description`.** Optional string. Becomes a doc comment in the generated output. Every
 construct in a module file accepts one.
 
+A description may reference another construct with an anchor: `[[name]]`, where `name`
+is the bare spec name of any handle, callback, alias, struct, enum, constant, or
+function. A bare name identifies exactly one construct, since validation rejects a name
+declared by more than one, of any kind. Validation also rejects an anchor that does not
+resolve, one whose target's state has `visibility: never`, and any double-bracket pair
+whose content is not a valid name, so a typo cannot silently degrade to prose. Double
+brackets are reserved; single brackets are ordinary prose. References to opt-in or
+opt-out targets are legal. Each generator rewrites an anchor to the name it emits; the
+C adapter emits the C name, with `()` appended for a function.
+
 **`lifecycle`.** Optional lifecycle history. A list of entries, newest first. The top
 entry is the construct's current state. Each entry is `[state, version, date]`:
 

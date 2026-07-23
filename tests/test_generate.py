@@ -671,6 +671,38 @@ class TestUnstableGating:
         gated = gated.split("#endif", 1)[0]
         assert "DUCKDB_V2_DEPRECATED" in gated
 
+    def test_anchor_resolved_in_header(self, tmp_path):
+        module = self._module(
+            handles={"conn": {"description": "Close with [[go]]."}},
+            functions={
+                "go": {
+                    "description": "Closes a [[conn]].",
+                    "return_type": "i32",
+                    "return_pointer": 0,
+                    "return_const": False,
+                    "parameters": {},
+                }
+            },
+        )
+        content = self._generate(module, self._metadata(), tmp_path)
+        assert "Close with duckdb_v2_go()." in content
+        assert "Closes a duckdb_v2_conn_ptr." in content
+
+    def test_comment_form_chosen_after_anchor_rewrite(self, tmp_path):
+        """The resolved name decides line length, not the anchor spelling."""
+        desc = "See [[a_rather_long_handle_name]]."
+        module = self._module(
+            handles={
+                "a_rather_long_handle_name": {},
+                "conn": {"description": desc},
+            },
+        )
+        width = len("//! ") + len(desc)  # fits as spelled, not once resolved
+        content = self._generate(
+            module, self._metadata(), tmp_path, options={"comment_width": width}
+        )
+        assert "/*!\n * See duckdb_v2_a_rather_long_handle_name_ptr.\n */" in content
+
     def test_enum_max_sentinel_disabled_by_option(self, tmp_path):
         module = self._module(enums={"MODE": {"values": {"MODE_A": {"value": 0}}}})
         content = self._generate(

@@ -142,6 +142,14 @@ body, which follows its opener directly.
 the `c_doc` filter (a description, indent-aware) and the `c_lines` filter (raw prefixed
 lines, for the pieces of a function's `/*! ... */` block).
 
+An `[[anchor]]` in a description names another construct by its bare spec name.
+Validation checks it resolves and that double brackets hold nothing else
+(`validate.py`, pass 5). The C adapter rewrites anchors as a post-step
+(`rewrite_doc_anchors`, like the enum sentinel), before the comment form is chosen,
+so the resolved length decides `//!` versus block. The parser lives in
+`src/capigen/anchors.py`; binding generators use its `rewrite_anchors` with their own
+name mapping. The rules are in `schema_reference.md`.
+
 ### Prefix application
 
 `metadata.yaml` declares a `prefix` that is prepended to every generated identifier.

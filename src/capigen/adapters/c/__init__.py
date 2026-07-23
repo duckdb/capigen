@@ -6,7 +6,12 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from ...states import resolve_states
 from .comments import doc, prefixed
-from .resolve import add_enum_sentinels, resolve_c_options, resolve_modules
+from .resolve import (
+    add_enum_sentinels,
+    resolve_c_options,
+    resolve_modules,
+    rewrite_doc_anchors,
+)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 OPTIONS_SCHEMA = Path(__file__).parent / "options.schema.json"
@@ -24,6 +29,7 @@ def generate(
     c_opts = resolve_c_options(metadata, options, states)
     if options.get("emit_enum_max_member", True):
         add_enum_sentinels(render_modules)
+    rewrite_doc_anchors(render_modules, modules, metadata)
     width = int(c_opts["comment_width"])
 
     def _c_doc(description: str, indent: str = "") -> str:

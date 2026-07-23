@@ -1,5 +1,6 @@
 """Resolve API spec dicts into C-specific render objects for Jinja2 templates."""
 
+from ...anchors import rewrite_anchors
 from ...states import State, current_state, resolve_states
 from ...tools import apply_prefix as _apply_prefix
 from ...tools import build_registry as _build_registry
@@ -499,3 +500,71 @@ def add_enum_sentinels(render_modules: list[CModule]) -> None:
                     "the generated max-value sentinel"
                 )
             enum.values[sentinel] = CEnumValue(value="0x7FFFFFFF")
+
+
+def rewrite_doc_anchors(
+    render_modules: list[CModule], modules: list[dict], metadata: dict
+) -> None:
+    """Replace [[name]] in every description with the generated C name.
+
+    C-prose policy, applied by the C adapter as a post-step: the other
+    adapters render no descriptions, so they never rewrite and never raise.
+    """
+    prefix = metadata.get("prefix", "")
+    registry = _build_registry(modules, metadata["suffixes"], prefix)
+    names = _anchor_names(modules, registry, prefix)
+    for rmod in render_modules:
+        _rewrite_module_docs(rmod, names)
+
+
+def _anchor_names(
+    modules: list[dict], registry: dict[str, str], prefix: str
+) -> dict[str, str]:
+    """What each anchorable bare spec name renders as in C prose."""
+    uprefix = prefix.upper()
+    names: dict[str, str] = {}
+    for mod in modules:
+        for construct in ("handles", "callbacks", "aliases", "structs", "enums"):
+            for name in mod.get(construct, {}):
+                names[name] = registry[name]
+        for name in mod.get("constants", {}):
+            names[name] = f"{uprefix}{name}"
+        for name in mod.get("functions", {}):
+            names[name] = f"{prefix}{name}()"
+    return names
+
+
+def _rewrite_module_docs(rmod: CModule, names: dict[str, str]) -> None:
+    def render(name: str) -> str:
+        if name not in names:
+            raise ValueError(
+                f"Module '{rmod.name}': description anchor "
+                f"'[[{name}]]' does not resolve"
+            )
+        return names[name]
+
+    def rw_fields(fields: list[CField]) -> None:
+        for f in fields:
+            f.description = rewrite_anchors(f.description, render)
+            for m in f.union_members or []:
+                m.description = rewrite_anchors(m.description, render)
+                rw_fields(m.fields)
+            rw_fields(f.nested_fields or [])
+
+    for t in rmod.types:
+        t.description = rewrite_anchors(t.description, render)
+    for s in rmod.structs:
+        s.description = rewrite_anchors(s.description, render)
+        rw_fields(s.fields)
+    for e in rmod.enums:
+        e.description = rewrite_anchors(e.description, render)
+        for v in e.values.values():
+            v.description = rewrite_anchors(v.description, render)
+    for c in rmod.constants:
+        c.description = rewrite_anchors(c.description, render)
+    for fp in rmod.function_ptrs:
+        fp.description = rewrite_anchors(fp.description, render)
+    for fn in rmod.functions.values():
+        fn.description = rewrite_anchors(fn.description, render)
+        for p in fn.parameters.values():
+            p.description = rewrite_anchors(p.description, render)
