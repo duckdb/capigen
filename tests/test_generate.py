@@ -219,6 +219,57 @@ class TestUnionStructRendering:
         assert "//! out-of-line form" in content
 
 
+class TestPointerAliasStruct:
+    """The struct tag and the pointer typedef are distinct names, so the
+    forward declaration is valid C++ (a typedef may not redeclare a class
+    name as a different type)."""
+
+    def _metadata(self):
+        return {
+            "schema_version": "0.5",
+            "versions": ["v1.0.0"],
+            "prefix": "duckdb_v2_",
+            "suffixes": {"handles": "_ptr", "callbacks": "_cb", "aliases": "_t"},
+            "primitives": [{"name": "i32", "c_type": "int32_t"}],
+        }
+
+    def _module(self):
+        return {
+            "module": "m",
+            "structs": {
+                "box": {
+                    "pointer_alias": True,
+                    "fields": [
+                        {"name": "val", "type": "i32", "pointer": 0, "const": False}
+                    ],
+                },
+            },
+        }
+
+    def test_tag_and_typedef_are_distinct(self, tmp_path):
+        output = tmp_path / "out.h"
+        generate([self._module()], self._metadata(), output)
+        content = output.read_text()
+        assert "typedef struct duckdb_v2_box *duckdb_v2_box_t;" in content
+        assert "struct duckdb_v2_box {" in content
+        # Never the C++-invalid self-redeclaring form.
+        assert "typedef struct duckdb_v2_box_t" not in content
+
+    @pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler available")
+    @pytest.mark.parametrize("lang", ["c", "c++"])
+    def test_compiles_in_both_languages(self, tmp_path, lang):
+        output = tmp_path / "out.h"
+        generate([self._module()], self._metadata(), output)
+        probe = tmp_path / ("probe.c" if lang == "c" else "probe.cpp")
+        probe.write_text('#include "out.h"\nint main(void) { return 0; }\n')
+        result = subprocess.run(
+            ["cc", "-fsyntax-only", f"-x{lang}", "-I", str(tmp_path), str(probe)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+
 class TestDescriptionRendering:
     """Descriptions render as prefixed comment lines, one per paragraph."""
 
