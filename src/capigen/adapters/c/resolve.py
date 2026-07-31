@@ -64,11 +64,18 @@ def _state_condition(state: State) -> str | None:
 def _gating(d: dict, states: dict[str, State], gated: bool = True) -> tuple[bool, str]:
     """How a construct renders across versions: (omitted, guard directive).
 
-    A lifecycle is a stack of dated transitions, newest first. Entry i governs
-    the band from its own version up to the next newer one, so what gates a
-    construct depends on the version the consumer targets, not only on the state
-    it is in today. Each band contributes a term that is vacuously true outside
-    itself, so the bands conjoin into a single `#if`.
+    A construct is emitted from the version it was first *promised* — the oldest
+    entry in a state that is not opt-in. Introduction does not gate: while a
+    construct is unstable it is reachable only by opting into the unstable
+    surface, and that opt-in requires targeting the newest version, so there is
+    no target at which "introduced but not yet promised" is separately visible.
+    That keeps the promise exact: targeting a version yields the constructs that
+    version promised, whose shapes are frozen, rather than shapes that may since
+    have changed underneath an unstable name.
+
+    A construct still in an opt-in state has no promised version, so it gates on
+    the opt-in switch alone. An opt-out state (deprecation) adds a term relative
+    to the version it was declared in, so an older target still sees it.
 
     Only functions are gated (`gated=False` for everything else). A type is inert
     and unreachable without a function, so hiding it buys a consumer nothing while
@@ -102,39 +109,39 @@ def _gating(d: dict, states: dict[str, State], gated: bool = True) -> tuple[bool
     def below(v: str) -> str:
         return f"{macro}_BELOW({_version_args(v)})"
 
-    terms: list[str] = []
-    intro = entries[-1][1]
-    # Below the oldest transition the construct did not exist. Skipped when no
-    # legal target can be lower, so an always-true term is never emitted.
-    if floor is None or _version_key(intro) > _version_key(floor):
-        terms.append(at_least(intro))
+    # Oldest entry whose state is not opt-in: the version this was promised in.
+    promised = [
+        e
+        for e in reversed(entries)
+        if (st := states.get(e[0])) is not None and st.visibility != "opt_in"
+    ]
+    if not promised:
+        # Never promised. Reachable only through the opt-in switch, which itself
+        # requires the newest target, so no version term can add anything.
+        condition = _state_condition(current) if current else None
+        return False, (f"#if {condition}" if condition else "")
 
-    for i, entry in enumerate(entries):
-        state = states.get(entry[0])
-        if state is None:
-            continue
-        escapes: list[str] = []
-        if i > 0:  # not the newest: this band ends where the next begins
-            escapes.append(at_least(entries[i - 1][1]))
-        if i < len(entries) - 1:  # not the oldest: `intro` already excludes below
-            escapes.append(below(entry[1]))
-        if state.visibility != "never":
-            condition = _state_condition(state)
-            if condition is None:
-                continue  # visible unconditionally in this band
-            escapes.append(condition)
-        if not escapes:
-            return True, ""  # removed, with no band in which it survives
-        terms.append(escapes[0] if len(escapes) == 1 else f"({' || '.join(escapes)})")
+    terms: list[str] = []
+    since = promised[0][1]
+    if floor is None or _version_key(since) > _version_key(floor):
+        terms.append(at_least(since))
+
+    # An opt-out state is relative to the version it was declared in: a target
+    # older than that still predates the policy and keeps the construct.
+    if current is not None and current.visibility == "opt_out":
+        condition = _state_condition(current)
+        if condition:
+            declared = entries[0][1]
+            # The escape is only reachable when some legal target predates the
+            # policy. A construct promised and deprecated in the same version has
+            # no such target, so the bare switch is the whole condition.
+            if _version_key(declared) > _version_key(since):
+                terms.append(f"({below(declared)} || {condition})")
+            else:
+                terms.append(condition)
 
     if not terms:
         return False, ""
-    if len(terms) == 1:
-        # A lone state condition is the classic form; keep it idiomatic.
-        if terms[0].startswith("defined("):
-            return False, f"#ifdef {terms[0][len('defined(') : -1]}"
-        if terms[0].startswith("!defined("):
-            return False, f"#ifndef {terms[0][len('!defined(') : -1]}"
     return False, f"#if {' && '.join(terms)}"
 
 

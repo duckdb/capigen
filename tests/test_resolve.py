@@ -815,15 +815,24 @@ class TestStateGating:
         assert t.guard_directive == ""
         assert t.omitted is False
 
-    def test_stabilized_history_gates_on_the_unstable_band(self, metadata, make_module):
-        """Plain at or past stabilization; opt-in for targets still in the unstable band."""
+    def test_gate_starts_at_the_version_it_was_promised(self, metadata, make_module):
+        """Introduction does not gate: only the version it was promised in does.
+
+        Reaching it before that needs the unstable surface, which requires the
+        newest target, so no in-between target can see it."""
         status = [
             ["stable", "v1.1.0", "2026-06-01"],
             ["unstable", "v1.0.0", "2026-01-01"],
         ]
         modules = [make_module("m", functions={"f": _fn(status)})]
         assert resolve_modules(modules, metadata)[0].functions["f"].guard_directive == (
-            "#if (API_VERSION_AT_LEAST(1, 1, 0) || API_ALLOW_UNSTABLE)"
+            "#if API_VERSION_AT_LEAST(1, 1, 0)"
+        )
+
+    def test_never_promised_gates_on_the_switch_alone(self, metadata, make_module):
+        modules = [make_module("m", functions={"f": _fn(UNSTABLE)})]
+        assert resolve_modules(modules, metadata)[0].functions["f"].guard_directive == (
+            "#if API_ALLOW_UNSTABLE"
         )
 
     def test_removed_handle_is_omitted(self, metadata, make_module):

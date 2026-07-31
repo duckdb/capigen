@@ -13,22 +13,22 @@ targets.
 
 ```yaml
 # metadata.yaml
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.6.0/src/capigen/schema/metadata.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.7.0/src/capigen/schema/metadata.schema.json
 ```
 
 ```yaml
 # a module file
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.6.0/src/capigen/schema/module.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.7.0/src/capigen/schema/module.schema.json
 ```
 
 Every schema change is at least a minor bump, so all patch tags in a `MAJOR.MINOR` line
-carry the same schema. Pin to the first tag of the line: `v0.6.0` for schema `0.6`.
+carry the same schema. Pin to the first tag of the line: `v0.7.0` for schema `0.7`.
 
 `raw.githubusercontent.com` serves the same files if you would rather not depend on
 jsDelivr. Keep the path, change the host:
 
 ```
-https://raw.githubusercontent.com/duckdb/capigen/v0.6.0/src/capigen/schema/module.schema.json
+https://raw.githubusercontent.com/duckdb/capigen/v0.7.0/src/capigen/schema/module.schema.json
 ```
 
 ## Two conventions first
@@ -81,10 +81,13 @@ the stack above, a function unstable in v1.5.0 and stable in v1.5.6 emits under:
 #if LIB_API_VERSION_AT_LEAST(1, 5, 0) && (LIB_API_VERSION_AT_LEAST(1, 5, 6) || LIB_API_ALLOW_UNSTABLE)
 ```
 
-That is "as of the version I target": targeting v1.5.6 or later gets it unconditionally,
-targeting v1.5.0 gets it only by opting into the unstable surface, and targeting
-anything older does not see it at all. Deprecation works the same way round, so a
-construct deprecated in v1.5.6 stays visible to a consumer targeting v1.5.4.
+A construct is emitted from the version it was **promised** in, not the version it was
+introduced in, so the gate above reduces to `AT_LEAST(1, 5, 6)`. Introduction does not
+gate: while a construct is unstable its shape may still change, so it is not part of any
+released version, and reaching it requires opting into the unstable surface — which the
+C adapter couples to targeting the newest version. A construct that has never been
+promised gates on that switch alone. Deprecation, by contrast, is relative: a construct
+deprecated in v1.5.6 stays visible to a consumer targeting v1.5.4.
 
 Cross-module validation checks each state name against the declared states, and rejects
 a construct that references something emitted nowhere — a `never` type. It also rejects
@@ -186,7 +189,7 @@ never scanned for modules. For editor autocomplete, point the modeline at the
 adapter's schema:
 
 ```yaml
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.6.0/src/capigen/adapters/c/options.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.7.0/src/capigen/adapters/c/options.schema.json
 ```
 
 What a construct *is* lives in the spec proper (types, signatures, lifecycle states);

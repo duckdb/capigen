@@ -88,6 +88,16 @@ extern "C" {
 #endif
 
 {% endfor %}
+{% for g in c_opts.gated_states if g.default == "0" %}
+//! The {{ g.name }} surface is not a promise, so it is not part of any released
+//! version: its constructs may change shape or vanish. Targeting an older version
+//! while opting into it would hand back today's shapes under names that version
+//! never promised, so the two are mutually exclusive.
+#if {{ g.allow }} && !{{ v }}_AT_LEAST({{ c_opts.default_version[0] }}, {{ c_opts.default_version[1] }}, {{ c_opts.default_version[2] }})
+#error "the {{ g.name }} surface requires targeting the newest API version"
+#endif
+
+{% endfor %}
 {% endif %}
 //===--------------------------------------------------------------------===//
 // General type definitions

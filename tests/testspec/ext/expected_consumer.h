@@ -23,7 +23,7 @@ typedef struct {
 #define ext_open ext_api.ext_open
 #define ext_close ext_api.ext_close
 #define ext_version ext_api.ext_version
-#if (EXT_API_VERSION_AT_LEAST(1, 1, 0) || EXT_API_ALLOW_UNSTABLE)
+#if EXT_API_VERSION_AT_LEAST(1, 1, 0)
 #define ext_extra_two ext_api.ext_extra_two
 #endif
 #if EXT_API_ALLOW_UNSTABLE

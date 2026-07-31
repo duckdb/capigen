@@ -18,6 +18,13 @@ way spec authors do for the schema.
   (for example a rendering fix); when it does, the release notes must say so, because
   consumers see the diff at their next deliberate pin bump.
 
+A change that alters how existing spec data is *interpreted* — same spec in, different
+output out — is a minor, not a patch, even though no field was added or removed. It
+cannot invalidate a spec, so it is not a major, but it is the case that most needs
+explicit release notes: a consumer bumping the pin gets a header diff it did not ask
+for, and possibly a build that no longer compiles. Say what changed and that the
+output moved.
+
 Adapter options are part of each adapter's contract: every adapter ships a strict
 schema for its options file, versioned with the package. Adding an option is a
 minor, removing or renaming one is a major, and a patch never touches options.
