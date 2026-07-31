@@ -212,41 +212,56 @@ visibility table.
 There is no built-in vocabulary: a spec declares every state it uses under
 `lifecycle_states` in metadata, and guard tokens live on the state declaration, not
 in adapter options.
-The conventional block gates `unstable` opt-in (`#ifdef LIB_API_UNSTABLE`) and
-`deprecated` opt-out (`#ifndef LIB_API_NO_DEPRECATED`), keeps `stable` and `frozen`
+The conventional block gates `unstable` opt-in and `deprecated` opt-out, keeps `stable`
 visible, and omits `removed`.
 
+**Only functions are gated.** A type is unreachable without a function, so hiding it
+buys a consumer nothing while creating references that dangle at some target versions —
+which was the sole source of "declared here but compiled out there" bugs. Types keep
+their `lifecycle` for documentation and the `history:` comment, and are always emitted
+unless their state is `never`.
+
+Emission is version-relative: a function appears when the consumer's target version is
+new enough *and* the current state's switch allows it. The whole lifecycle stack folds
+into one condition, so "give me the API as of version X" is the header's actual
+semantics rather than a convention:
+
 ```c
-#ifdef LIB_API_UNSTABLE
+#if LIB_API_VERSION_AT_LEAST(1, 5, 0) && (LIB_API_VERSION_AT_LEAST(1, 5, 6) || LIB_API_ALLOW_UNSTABLE)
 //! An experimental scratch buffer.
 typedef void *lib_scratch_ptr;
 #endif
 ```
 
-Gating applies to every construct that accepts `lifecycle`. A struct's forward declaration
-and its definition are both guarded. An omitted construct disappears from the header
-entirely.
+Every gated state gets a positive-polarity `{PREFIX}API_ALLOW_{STATE}` switch, so opt-in
+and opt-out read the same way round; the state's `guard` is the older negative macro and
+only seeds that switch's default. A translation unit sets `{PREFIX}API_VERSION_MAJOR` /
+`_MINOR` / `_PATCH` (all three or none) to target an older surface; it defaults to the
+newest version the spec declares.
 
-Cross-module validation enforces one invariant: a construct may reference a type only
-if every guard configuration that emits the construct also emits the type. So a visible
-construct cannot reference an unstable or removed type, opt-in constructs can only
-reference opt-in types under the same guard, and only omitted constructs reference
-omitted types.
-The check covers alias underlyings, struct fields, signatures, and a handle's
-`cleanup_with`.
+A `removed` construct disappears from the header entirely, type or function.
+
+Cross-module validation enforces two things. A construct may not reference something
+emitted nowhere — a `never` type, or a `cleanup_with` naming a removed function, which
+would leave a handle with no way to free it. And a function may not be stamped older
+than a type in its own signature: the signature described cannot be the one that
+version shipped, so a consumer targeting a version in between would get a declaration
+the library of that version never exported. The checks cover alias underlyings, struct
+fields, signatures, and `cleanup_with`.
 
 Per-adapter behavior:
 
-- The bridge adapter defines every opt-in guard at the top of the stub file, because
-  the engine implements the full surface. Omitted functions get no stub.
-- The extension_header adapter gates appended members with the `unstable` state's guard
-  and requires that state to be opt-in. Omitted functions are never appended, but a
-  frozen template member whose function is now removed keeps its slot, so the vtable
-  ABI never shifts.
-- A function with the legacy `deprecated` field (no status) still gates with the
-  deprecated state's guard via the template's own `#ifndef` wrap. The gate fires
-  only when the declared states include an opt-out `deprecated` state, so the
-  rendered guards always match what validation modeled.
+- The bridge adapter sets every switch at the top of the stub file, because the engine
+  implements the full surface. Removed functions get no stub.
+- The extension_header adapter derives its function-pointer struct entirely from the
+  spec. Members group into contiguous bands by the version they were *stabilized* in
+  (clamped to a `version_floor` option, the version the struct was introduced), one
+  `#if` per band, so pinning an older version truncates the struct to exactly the
+  prefix that version's engine shipped. Not-yet-stable members form a tail gated on
+  the opt-in switch; a slot is frozen by stabilization, not introduction, because
+  while unstable it is only reachable from a build locked to one exact engine. A
+  removed function keeps its slot and loses its macro; the engine leaves it null.
+  `renamed_from` emits the old spelling as an alias below the renaming version.
 - The old token options (`unstable_guard`, `no_deprecated_guard`) fail the C
   adapter's options schema, never silently ignored.
 

@@ -1,10 +1,11 @@
 """Resolve API spec dicts into C-specific render objects for Jinja2 templates."""
 
 from ...anchors import rewrite_anchors
-from ...states import State, current_state, resolve_states
+from ...states import State, current_state, resolve_states, version_macro_base
 from ...tools import apply_prefix as _apply_prefix
 from ...tools import build_registry as _build_registry
 from ...tools import resolve_enum_values
+from ...tools import version_key as _version_key
 from .comments import DEFAULT_WIDTH
 from .render import (
     CConstant,
@@ -16,23 +17,125 @@ from .render import (
     CFunction,
     CModule,
     CParam,
+    CRemoved,
     CStruct,
     CTypeDef,
     CUnionMember,
 )
 
 
-def _gating(d: dict, states: dict[str, State]) -> tuple[bool, str]:
-    """How a construct's current state renders: (omitted, guard directive)."""
-    name = current_state(d)
-    state = states.get(name) if name else None
-    if state is None or state.visibility == "always":
+def _version_args(version: str) -> str:
+    """A vX.Y.Z string as the argument list of a version-comparison macro."""
+    return ", ".join(str(n) for n in _version_key(version))
+
+
+def state_version(d: dict) -> str | None:
+    """Version stamped on the construct's current lifecycle entry, if any."""
+    lifecycle = d.get("lifecycle") or []
+    if not lifecycle:
+        return None
+    entry = lifecycle[0]
+    return entry[1] if len(entry) > 1 else None
+
+
+def _with_history(description: str | None, d: dict) -> str:
+    """Append the construct's lifecycle, oldest first, as a list of doc lines.
+
+    The gate above a construct says what compiles it; this says why. Rendered
+    through the ordinary description pipeline, so the list items keep their own
+    lines and the comment form is chosen from the whole text.
+    """
+    entries = [e for e in (d.get("lifecycle") or []) if len(e) > 1]
+    if not entries:
+        return description or ""
+    items = "\n".join(f"- {e[0]}: {e[1]}" for e in reversed(entries))
+    history = f"history:\n{items}"
+    text = (description or "").strip()
+    return f"{text}\n\n{history}" if text else history
+
+
+def _state_condition(state: State) -> str | None:
+    """What must hold for a construct to be emitted while in this state."""
+    if state.visibility in ("opt_in", "opt_out"):
+        return state.allow_macro
+    return None  # always: no condition
+
+
+def _gating(d: dict, states: dict[str, State], gated: bool = True) -> tuple[bool, str]:
+    """How a construct renders across versions: (omitted, guard directive).
+
+    A lifecycle is a stack of dated transitions, newest first. Entry i governs
+    the band from its own version up to the next newer one, so what gates a
+    construct depends on the version the consumer targets, not only on the state
+    it is in today. Each band contributes a term that is vacuously true outside
+    itself, so the bands conjoin into a single `#if`.
+
+    Only functions are gated (`gated=False` for everything else). A type is inert
+    and unreachable without a function, so hiding it buys a consumer nothing while
+    creating references that dangle at some target versions. Types still carry
+    their lifecycle, which documents them and drives the `history:` comment; a
+    `never` type is still omitted, since that says it is not part of the API at all.
+    """
+    entries = [e for e in (d.get("lifecycle") or []) if len(e) > 1]
+    if not entries:
         return False, ""
-    if state.visibility == "never":
+    # Every declared state carries the spec's version macro, so this is empty only
+    # when the spec declares no states at all — in which case no entry names a known
+    # state and nothing can gate.
+    macro = next((s.version_macro for s in states.values() if s.version_macro), "")
+    if not macro:
+        return False, ""
+    floor = next((s.version_floor for s in states.values() if s.version_floor), None)
+
+    # Removal is not version-relative. Deprecation is policy, but a removed
+    # symbol is gone from the library a consumer links against, whatever version
+    # it targets, so declaring it would only turn a compile error into a link one.
+    current = states.get(entries[0][0])
+    if current is not None and current.visibility == "never":
         return True, ""
-    if state.visibility == "opt_in":
-        return False, f"#ifdef {state.guard}"
-    return False, f"#ifndef {state.guard}"  # opt_out
+    if not gated:
+        return False, ""
+
+    def at_least(v: str) -> str:
+        return f"{macro}_AT_LEAST({_version_args(v)})"
+
+    def below(v: str) -> str:
+        return f"{macro}_BELOW({_version_args(v)})"
+
+    terms: list[str] = []
+    intro = entries[-1][1]
+    # Below the oldest transition the construct did not exist. Skipped when no
+    # legal target can be lower, so an always-true term is never emitted.
+    if floor is None or _version_key(intro) > _version_key(floor):
+        terms.append(at_least(intro))
+
+    for i, entry in enumerate(entries):
+        state = states.get(entry[0])
+        if state is None:
+            continue
+        escapes: list[str] = []
+        if i > 0:  # not the newest: this band ends where the next begins
+            escapes.append(at_least(entries[i - 1][1]))
+        if i < len(entries) - 1:  # not the oldest: `intro` already excludes below
+            escapes.append(below(entry[1]))
+        if state.visibility != "never":
+            condition = _state_condition(state)
+            if condition is None:
+                continue  # visible unconditionally in this band
+            escapes.append(condition)
+        if not escapes:
+            return True, ""  # removed, with no band in which it survives
+        terms.append(escapes[0] if len(escapes) == 1 else f"({' || '.join(escapes)})")
+
+    if not terms:
+        return False, ""
+    if len(terms) == 1:
+        # A lone state condition is the classic form; keep it idiomatic.
+        if terms[0].startswith("defined("):
+            return False, f"#ifdef {terms[0][len('defined(') : -1]}"
+        if terms[0].startswith("!defined("):
+            return False, f"#ifndef {terms[0][len('!defined(') : -1]}"
+    return False, f"#if {' && '.join(terms)}"
 
 
 def _default_banner(prefix: str) -> str:
@@ -66,11 +169,6 @@ def resolve_c_options(
     c = options or {}
     if states is None:
         states = resolve_states(metadata)
-    # The legacy `deprecated` field gates with the deprecated state's token.
-    # Without an opt_out deprecated state the gate never fires and the token
-    # stays empty.
-    dep = states.get("deprecated")
-    dep_guard = dep.guard if dep and dep.visibility == "opt_out" else ""
     return {
         # Only decides `//!` line vs `/*! ... */` block; wrapping is the formatter's.
         "comment_width": c.get("comment_width", DEFAULT_WIDTH),
@@ -80,13 +178,38 @@ def resolve_c_options(
         ),
         "deprecated_macro": c.get("deprecated_macro", f"{uprefix}DEPRECATED"),
         "emit_deprecated_attribute": bool(c.get("emit_deprecated_attribute", False)),
-        "no_deprecated_guard": dep_guard,
         "typedef_guard_prefix": c.get("typedef_guard_prefix", f"{uprefix}TYPEDEF_"),
         "banner": c.get("banner", _default_banner(prefix)),
         "emit_v1_primitive_defs": bool(c.get("emit_v1_primitive_defs", False)),
         "emit_arrow_defs": bool(c.get("emit_arrow_defs", False)),
         "emit_extension_api": bool(c.get("emit_extension_api", False)),
+        # Constructs gate on the version the consumer targets, not only on state.
+        # Spec-level, so this adapter and the extension header agree.
+        "version_macro": version_macro_base(metadata),
+        "default_version": _default_target(metadata),
+        "gated_states": [
+            {
+                "allow": st.allow_macro,
+                "guard": st.guard,
+                "default": "0" if st.visibility == "opt_in" else "1",
+                "legacy": "1" if st.visibility == "opt_in" else "0",
+                "name": st.name,
+            }
+            for st in states.values()
+            if st.allow_macro
+        ],
     }
+
+
+def _default_target(metadata: dict) -> tuple[int, int, int]:
+    """The version a translation unit targets unless it says otherwise: the latest known."""
+    versions = metadata.get("versions") or []
+    if not versions:
+        raise ValueError(
+            "gating on version requires a non-empty 'versions' list in metadata"
+        )
+    major, minor, patch = _version_key(max(versions, key=_version_key))
+    return major, minor, patch
 
 
 def resolve_modules(
@@ -165,6 +288,41 @@ def _format_c_type(base: str, pointer: int = 0, is_const: bool = False) -> str:
 # ---------------------------------------------------------------------------
 
 
+_REMOVABLE = (
+    ("handles", "handle"),
+    ("aliases", "alias"),
+    ("structs", "struct"),
+    ("enums", "enum"),
+    ("callbacks", "callback"),
+    ("functions", "function"),
+)
+
+
+def _resolve_removed(
+    mod: dict, states: dict[str, State], registry: dict[str, str], prefix: str
+) -> list[CRemoved]:
+    """Constructs that no longer exist, kept as tombstones.
+
+    A removed construct is not declared at any target version, because the
+    symbol is gone from the library a consumer links against. Recording it
+    still tells a reader what the name used to be and when it went away.
+    """
+    out: list[CRemoved] = []
+    for key, kind in _REMOVABLE:
+        for name, d in (mod.get(key) or {}).items():
+            state = states.get(current_state(d) or "")
+            if state is None or state.visibility != "never":
+                continue
+            out.append(
+                CRemoved(
+                    name=registry.get(name) or _apply_prefix(prefix, name),
+                    version=state_version(d) or "",
+                    kind=kind,
+                )
+            )
+    return out
+
+
 def _resolve_module(
     mod: dict,
     registry: dict[str, str],
@@ -178,6 +336,7 @@ def _resolve_module(
     uprefix = prefix.upper()
     return CModule(
         name=mod["module"],
+        removed=_resolve_removed(mod, states, registry, prefix),
         types=(
             [
                 _resolve_handle(
@@ -233,14 +392,14 @@ def _resolve_handle(
     tagged_struct: bool = False,
 ) -> CTypeDef:
     prefixed = _apply_prefix(prefix, name)
-    omitted, guard_directive = _gating(h, states)
+    omitted, guard_directive = _gating(h, states, gated=False)
     return CTypeDef(
         name=prefixed,
         canonical_name=f"{prefixed}{suffixes['handles']}",
         base="void",
         is_pointer=True,
         tagged_struct=tagged_struct,
-        description=h.get("description", ""),
+        description=_with_history(h.get("description"), h),
         omitted=omitted,
         guard_directive=guard_directive,
     )
@@ -256,7 +415,7 @@ def _resolve_alias(
     prefix: str = "",
 ) -> CTypeDef:
     base = _resolve_c_name(a["underlying"], registry, primitives, f"Alias '{name}'")
-    omitted, guard_directive = _gating(a, states)
+    omitted, guard_directive = _gating(a, states, gated=False)
     if a.get("qualified"):
         return CTypeDef(
             name=name,
@@ -264,7 +423,7 @@ def _resolve_alias(
             base=base,
             is_pointer=False,
             is_qualified=True,
-            description=a.get("description", ""),
+            description=_with_history(a.get("description"), a),
             omitted=omitted,
             guard_directive=guard_directive,
         )
@@ -274,7 +433,7 @@ def _resolve_alias(
         canonical_name=f"{prefixed}{suffixes['aliases']}",
         base=base,
         is_pointer=False,
-        description=a.get("description", ""),
+        description=_with_history(a.get("description"), a),
         omitted=omitted,
         guard_directive=guard_directive,
     )
@@ -344,13 +503,13 @@ def _resolve_struct(
         for f in s.get("fields", [])
     ]
 
-    omitted, guard_directive = _gating(s, states)
+    omitted, guard_directive = _gating(s, states, gated=False)
     return CStruct(
         name=prefixed,
         template_alias=alias,
         pointer_alias=s.get("pointer_alias", False),
         fields=fields,
-        description=s.get("description", ""),
+        description=_with_history(s.get("description"), s),
         omitted=omitted,
         guard_directive=guard_directive,
     )
@@ -382,7 +541,7 @@ def _resolve_callback(
             )
         )
 
-    omitted, guard_directive = _gating(cb, states)
+    omitted, guard_directive = _gating(cb, states, gated=False)
     return CFuncPtr(
         name=prefixed,
         template_alias=alias,
@@ -392,7 +551,7 @@ def _resolve_callback(
         return_pointer=cb["return_pointer"],
         return_const=cb["return_const"],
         params=params,
-        description=cb.get("description", ""),
+        description=_with_history(cb.get("description"), cb),
         omitted=omitted,
         guard_directive=guard_directive,
     )
@@ -422,34 +581,18 @@ def _resolve_function(
     )
     return_c = _format_c_type(return_base, func["return_pointer"], func["return_const"])
 
-    state_name = current_state(func)
-    if state_name == "deprecated":
-        deprecated = func["lifecycle"][0][1]
-    else:
-        deprecated = func.get("deprecated") or None
+    deprecated = state_version(func) if current_state(func) == "deprecated" else None
 
-    # A deprecated current state gates via its own guard directive; the legacy
-    # `deprecated` field gates via the extra #ifndef wrap in the template, and
-    # only when the declared states actually gate deprecation. This keeps the
-    # rendered guards identical to what validate_semantics models.
     omitted, guard_directive = _gating(func, states)
-    dep_state = states.get("deprecated")
-    deprecated_gate = (
-        bool(deprecated)
-        and state_name != "deprecated"
-        and dep_state is not None
-        and dep_state.visibility == "opt_out"
-    )
 
     return CFunction(
         name=fname,
-        description=func.get("description") or None,
+        description=_with_history(func.get("description"), func) or None,
         deprecated=deprecated,
         return_c=return_c,
         static_inline=bool(func.get("static_inline", False)),
         omitted=omitted,
         guard_directive=guard_directive,
-        deprecated_gate=deprecated_gate,
         parameters=params,
     )
 
@@ -471,10 +614,10 @@ def _resolve_enum(
         for vname, value in resolve_enum_values(enum)
     }
 
-    omitted, guard_directive = _gating(enum, states)
+    omitted, guard_directive = _gating(enum, states, gated=False)
     return CEnum(
         name=c_name,
-        description=enum.get("description", ""),
+        description=_with_history(enum.get("description"), enum),
         values=resolved_values,
         omitted=omitted,
         guard_directive=guard_directive,

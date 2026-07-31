@@ -52,6 +52,43 @@ extern "C" {
   #define {{ c_opts.deprecated_macro }}
 #endif
 
+{% set v = c_opts.version_macro %}
+//===--------------------------------------------------------------------===//
+// API version
+//===--------------------------------------------------------------------===//
+//! The API version this translation unit targets. Define all three to compile against an
+//! older surface than the one this header describes.
+#if !defined({{ v }}_MAJOR) && !defined({{ v }}_MINOR) && !defined({{ v }}_PATCH)
+#define {{ v }}_MAJOR {{ c_opts.default_version[0] }}
+#define {{ v }}_MINOR {{ c_opts.default_version[1] }}
+#define {{ v }}_PATCH {{ c_opts.default_version[2] }}
+#elif !(defined({{ v }}_MAJOR) && defined({{ v }}_MINOR) && defined({{ v }}_PATCH))
+#error "define all or none of the {{ v }}_MAJOR / _MINOR / _PATCH macros"
+#endif
+
+//! True when the targeted version is x.y.z or newer.
+#define {{ v }}_AT_LEAST(x, y, z) ({{ v }}_MAJOR > (x) || ({{ v }}_MAJOR == (x) && ({{ v }}_MINOR > (y) || ({{ v }}_MINOR == (y) && {{ v }}_PATCH >= (z)))))
+
+//! True when the targeted version is older than x.y.z.
+#define {{ v }}_BELOW(x, y, z) (!{{ v }}_AT_LEAST((x), (y), (z)))
+
+{% if c_opts.gated_states %}
+//===--------------------------------------------------------------------===//
+// Surface switches
+//===--------------------------------------------------------------------===//
+{% for g in c_opts.gated_states %}
+//! Set to 1 to compile the {{ g.name }} surface, 0 to omit it. Defaults from the
+//! older {{ g.guard }} macro when that is what the consumer defines.
+#if !defined({{ g.allow }})
+#ifdef {{ g.guard }}
+#define {{ g.allow }} {{ g.legacy }}
+#else
+#define {{ g.allow }} {{ g.default }}
+#endif
+#endif
+
+{% endfor %}
+{% endif %}
 //===--------------------------------------------------------------------===//
 // General type definitions
 //===--------------------------------------------------------------------===//
@@ -155,6 +192,25 @@ typedef {{ p.underlying }} {{ p.c_type }};
 
 {% endfor %}
 
+{% if renames %}
+//===--------------------------------------------------------------------===//
+// Renamed constructs
+//===--------------------------------------------------------------------===//
+//! Former spellings, available only while targeting a version that still had
+//! them. Each names the same construct, so an alias costs nothing at runtime.
+{% set v = c_opts.version_macro %}
+{% for r in renames %}
+#if {{ v }}_BELOW({{ r.args }})
+//! Renamed to {{ r.new }} in {{ r.version }}.
+{% if r.is_type %}
+typedef {{ r.new }} {{ r.old }};
+{% else %}
+#define {{ r.old }} {{ r.new }}
+{% endif %}
+#endif
+{% endfor %}
+
+{% endif %}
 {% if c_opts.emit_extension_api %}
 //===--------------------------------------------------------------------===//
 // DuckDB extension access

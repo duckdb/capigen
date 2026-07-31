@@ -15,7 +15,7 @@ TESTSPEC_DIR = Path(__file__).parent / "testspec" / "v2"
 
 def _metadata(**bridge_opts):
     meta = {
-        "schema_version": "0.5",
+        "schema_version": "0.6",
         "versions": ["1.0.0"],
         "prefix": "duckdb_v2_",
         "lifecycle_states": {

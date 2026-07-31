@@ -37,9 +37,12 @@ class TestRoundTrip:
         assert "DUCKDB_V2_TYPE" in content
         assert "DUCKDB_V2_API_ERROR" in content
         # The unstable constructs in the testspec render behind the opt-in guard.
-        assert "#ifdef DUCKDB_V2_API_UNSTABLE" in content
+        assert (
+            "#if DUCKDB_V2_API_VERSION_AT_LEAST(1, 0, 0) && "
+            "DUCKDB_V2_API_ALLOW_UNSTABLE" in content
+        )
         # The removed function is not emitted at all.
-        assert "legacy_open" not in content
+        assert "duckdb_v2_legacy_open(" not in content
         # Every enum ends with the width-pinning sentinel.
         assert "DUCKDB_V2_TYPE_MAX_ENUM = 0x7FFFFFFF," in content
 
@@ -226,7 +229,7 @@ class TestPointerAliasStruct:
 
     def _metadata(self):
         return {
-            "schema_version": "0.5",
+            "schema_version": "0.6",
             "versions": ["v1.0.0"],
             "prefix": "duckdb_v2_",
             "suffixes": {"handles": "_ptr", "callbacks": "_cb", "aliases": "_t"},
@@ -376,7 +379,7 @@ class TestMacroOptions:
 
     def _metadata(self):
         return {
-            "schema_version": "0.5",
+            "schema_version": "0.6",
             "versions": ["v1.0.0"],
             "prefix": "duckdb_v2_",
             "suffixes": {"handles": "_ptr", "callbacks": "_cb", "aliases": "_t"},
@@ -435,12 +438,20 @@ class TestMacroOptions:
 UNSTABLE = [["unstable", "v1.0.0", "2026-01-01"]]
 
 
+def _dep_gate(major: int, minor: int, patch: int) -> str:
+    """The opt-out directive for something deprecated in the given version."""
+    return (
+        "#if !defined(DUCKDB_V2_API_NO_DEPRECATED) || "
+        f"DUCKDB_V2_API_VERSION_BELOW({major}, {minor}, {patch})"
+    )
+
+
 class TestUnstableGating:
     """A construct whose current status is unstable renders behind an opt-in #ifdef."""
 
     def _metadata(self, **options):
         meta = {
-            "schema_version": "0.5",
+            "schema_version": "0.6",
             "versions": ["1.0.0"],
             "prefix": "duckdb_v2_",
             "lifecycle_states": {
@@ -482,52 +493,78 @@ class TestUnstableGating:
         generate([module], metadata, output, options=options)
         return output.read_text()
 
-    def test_unstable_handle_is_guarded(self, tmp_path):
+    def test_unstable_handle_is_not_guarded(self, tmp_path):
+        """Only functions gate; the type keeps its history comment and no #if."""
         module = self._module(handles={"scratch": {"lifecycle": UNSTABLE}})
         content = self._generate(module, self._metadata(), tmp_path)
         assert (
-            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
-            "typedef void* duckdb_v2_scratch_ptr;\n"
-            "#endif" in content
+            "/*!\n"
+            " * history:\n"
+            " * - unstable: v1.0.0\n"
+            " */\n"
+            "typedef void* duckdb_v2_scratch_ptr;" in content
         )
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
 
     def test_stable_handle_is_not_guarded(self, tmp_path):
         module = self._module(handles={"ctx": {}})
         content = self._generate(module, self._metadata(), tmp_path)
-        assert "#ifdef DUCKDB_V2_API_UNSTABLE" not in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
 
     def test_guard_wraps_the_doc_comment(self, tmp_path):
         module = self._module(
-            handles={"scratch": {"description": "Experimental.", "lifecycle": UNSTABLE}}
+            functions={
+                "poke": {
+                    "description": "Experimental.",
+                    "return_type": "i32",
+                    "return_pointer": 0,
+                    "return_const": False,
+                    "parameters": {},
+                    "lifecycle": UNSTABLE,
+                }
+            }
         )
         content = self._generate(module, self._metadata(), tmp_path)
         assert (
-            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
-            "//! Experimental.\n"
-            "typedef void* duckdb_v2_scratch_ptr;\n"
+            "#if DUCKDB_V2_API_ALLOW_UNSTABLE\n"
+            "/*!\n"
+            " * Experimental.\n"
+            " *\n"
+            " * history:\n"
+            " * - unstable: v1.0.0\n"
+            " *\n"
+            " * @return int32_t\n"
+            " */\n"
+            "DUCKDB_V2_C_API int32_t duckdb_v2_poke(void);\n"
             "#endif" in content
         )
 
-    def test_unstable_alias_is_guarded(self, tmp_path):
+    def test_unstable_alias_is_not_guarded(self, tmp_path):
         module = self._module(
             aliases={"count": {"underlying": "u32", "lifecycle": UNSTABLE}}
         )
         content = self._generate(module, self._metadata(), tmp_path)
         assert (
-            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
-            "typedef uint32_t duckdb_v2_count_t;\n"
-            "#endif" in content
+            "/*!\n"
+            " * history:\n"
+            " * - unstable: v1.0.0\n"
+            " */\n"
+            "typedef uint32_t duckdb_v2_count_t;" in content
         )
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
 
-    def test_unstable_enum_is_guarded(self, tmp_path):
+    def test_unstable_enum_is_not_guarded(self, tmp_path):
         module = self._module(
             enums={"MODE": {"values": {"MODE_A": {"value": 0}}, "lifecycle": UNSTABLE}}
         )
         content = self._generate(module, self._metadata(), tmp_path)
-        assert "#ifdef DUCKDB_V2_API_UNSTABLE\ntypedef enum DUCKDB_V2_MODE {" in content
-        assert "} DUCKDB_V2_MODE;\n#endif" in content
+        assert (
+            "/*!\n * history:\n * - unstable: v1.0.0\n */\ntypedef enum DUCKDB_V2_MODE {"
+            in content
+        )
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
 
-    def test_unstable_callback_is_guarded(self, tmp_path):
+    def test_unstable_callback_is_not_guarded(self, tmp_path):
         module = self._module(
             callbacks={
                 "notify": {
@@ -541,12 +578,15 @@ class TestUnstableGating:
         )
         content = self._generate(module, self._metadata(), tmp_path)
         assert (
-            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
-            "typedef void (*duckdb_v2_notify_cb)(void);\n"
-            "#endif" in content
+            "/*!\n"
+            " * history:\n"
+            " * - unstable: v1.0.0\n"
+            " */\n"
+            "typedef void (*duckdb_v2_notify_cb)(void);" in content
         )
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
 
-    def test_unstable_struct_guards_forward_declaration_and_body(self, tmp_path):
+    def test_unstable_struct_guards_neither_declaration_nor_body(self, tmp_path):
         module = self._module(
             structs={
                 "point": {
@@ -558,13 +598,12 @@ class TestUnstableGating:
             }
         )
         content = self._generate(module, self._metadata(), tmp_path)
+        assert "typedef struct duckdb_v2_point duckdb_v2_point;" in content
         assert (
-            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
-            "typedef struct duckdb_v2_point duckdb_v2_point;\n"
-            "#endif" in content
+            "/*!\n * history:\n * - unstable: v1.0.0\n */\nstruct duckdb_v2_point {"
+            in content
         )
-        assert "#ifdef DUCKDB_V2_API_UNSTABLE\nstruct duckdb_v2_point {" in content
-        assert "};\n#endif" in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
 
     def test_unstable_function_is_guarded(self, tmp_path):
         module = self._module(
@@ -579,8 +618,8 @@ class TestUnstableGating:
             }
         )
         content = self._generate(module, self._metadata(), tmp_path)
-        assert "#ifdef DUCKDB_V2_API_UNSTABLE" in content
-        declaration = content.split("#ifdef DUCKDB_V2_API_UNSTABLE", 1)[1]
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" in content
+        declaration = content.split("#if DUCKDB_V2_API_ALLOW_UNSTABLE", 1)[1]
         declaration = declaration.split("#endif", 1)[0]
         assert "duckdb_v2_poke(void);" in declaration
 
@@ -590,21 +629,31 @@ class TestUnstableGating:
         meta["lifecycle_states"] = {
             "unstable": {"visibility": "opt_in", "guard": "MY_UNSTABLE"}
         }
-        module = self._module(handles={"scratch": {"lifecycle": UNSTABLE}})
-        content = self._generate(module, meta, tmp_path)
-        assert (
-            "#ifdef MY_UNSTABLE\n"
-            "typedef void* duckdb_v2_scratch_ptr;\n"
-            "#endif" in content
+        module = self._module(
+            functions={
+                "poke": {
+                    "return_type": "i32",
+                    "return_pointer": 0,
+                    "return_const": False,
+                    "parameters": {},
+                    "lifecycle": UNSTABLE,
+                }
+            }
         )
+        content = self._generate(module, meta, tmp_path)
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" in content
+        # the declared token still seeds the switch's default
+        assert "#ifdef MY_UNSTABLE\n#define DUCKDB_V2_API_ALLOW_UNSTABLE 1" in content
 
-    def test_removed_handle_is_not_emitted(self, tmp_path):
+    def test_removed_handle_is_not_declared_but_is_recorded(self, tmp_path):
         status = [["removed", "v1.0.0", "2026-01-01"]]
         module = self._module(handles={"gone": {"lifecycle": status}})
         content = self._generate(module, self._metadata(), tmp_path)
-        assert "gone" not in content
+        assert "typedef void* duckdb_v2_gone_ptr;" not in content
+        assert "REMOVED IN v1.0.0" in content
+        assert "duckdb_v2_gone_ptr" in content  # named only inside the tombstone
 
-    def test_removed_function_is_not_emitted(self, tmp_path):
+    def test_removed_function_is_not_declared_but_is_recorded(self, tmp_path):
         status = [["removed", "v1.0.0", "2026-01-01"]]
         module = self._module(
             functions={
@@ -618,56 +667,53 @@ class TestUnstableGating:
             }
         )
         content = self._generate(module, self._metadata(), tmp_path)
-        assert "old_open" not in content
+        assert "duckdb_v2_old_open(" not in content
+        assert "REMOVED IN v1.0.0" in content
 
-    def test_deprecated_status_handle_gets_opt_out_guard(self, tmp_path):
-        """Types in an opt_out state render behind #ifndef."""
+    def test_deprecated_handle_gets_no_guard(self, tmp_path):
+        """Even an opt_out type renders plainly: only functions gate."""
         status = [["deprecated", "v1.1.0", "2026-06-01"]]
         module = self._module(handles={"legacy": {"lifecycle": status}})
         content = self._generate(module, self._metadata(), tmp_path)
         assert (
-            "#ifndef DUCKDB_V2_API_NO_DEPRECATED\n"
-            "typedef void* duckdb_v2_legacy_ptr;\n"
-            "#endif" in content
+            "/*!\n"
+            " * history:\n"
+            " * - deprecated: v1.1.0\n"
+            " */\n"
+            "typedef void* duckdb_v2_legacy_ptr;" in content
         )
+        assert "DUCKDB_V2_API_ALLOW_DEPRECATED\n" not in content
 
-    def _deprecated_module(self, by_status):
+    def _deprecated_module(self):
         func = {
             "return_type": "i32",
             "return_pointer": 0,
             "return_const": False,
             "parameters": {},
+            "lifecycle": [["deprecated", "v1.0.0", "2026-01-01"]],
         }
-        if by_status:
-            func["lifecycle"] = [["deprecated", "v1.0.0", "2026-01-01"]]
-        else:
-            func["deprecated"] = "v1.0.0"
         return self._module(functions={"old_poke": func})
 
-    @pytest.mark.parametrize("by_status", [True, False])
-    def test_deprecated_function_gated_and_emitted(self, tmp_path, by_status):
-        """One #ifndef gate, whichever way deprecation is spelled; always emitted."""
-        module = self._deprecated_module(by_status)
+    def test_deprecated_function_gated_and_emitted(self, tmp_path):
+        """One gate, and the declaration is always emitted."""
+        module = self._deprecated_module()
         content = self._generate(module, self._metadata(), tmp_path)
         assert (
-            content.count("#ifndef DUCKDB_V2_API_NO_DEPRECATED") == 1
+            content.count("#if DUCKDB_V2_API_ALLOW_DEPRECATED") == 1
             and "duckdb_v2_old_poke(void);" in content
         )
         # No attribute on the declaration by default; the preamble #define stays.
         assert "DUCKDB_V2_C_API DUCKDB_V2_DEPRECATED" not in content
 
-    @pytest.mark.parametrize("by_status", [True, False])
-    def test_emit_deprecated_attribute_adds_macro_inside_gate(
-        self, tmp_path, by_status
-    ):
-        module = self._deprecated_module(by_status)
+    def test_emit_deprecated_attribute_adds_macro_inside_gate(self, tmp_path):
+        module = self._deprecated_module()
         content = self._generate(
             module,
             self._metadata(),
             tmp_path,
             options={"emit_deprecated_attribute": True},
         )
-        gated = content.split("#ifndef DUCKDB_V2_API_NO_DEPRECATED", 1)[1]
+        gated = content.split("#if DUCKDB_V2_API_ALLOW_DEPRECATED", 1)[1]
         gated = gated.split("#endif", 1)[0]
         assert "DUCKDB_V2_DEPRECATED" in gated
 
@@ -715,8 +761,8 @@ class TestUnstableGating:
         content = self._generate(module, self._metadata(), tmp_path)
         assert "DUCKDB_V2_MODE_MAX_ENUM = 0x7FFFFFFF,\n} DUCKDB_V2_MODE;" in content
 
-    def test_unstable_qualified_alias_nests_typedef_guard(self, tmp_path):
-        """The qualified alias's typedef guard nests inside the unstable guard."""
+    def test_unstable_qualified_alias_keeps_only_its_typedef_guard(self, tmp_path):
+        """The typedef include-guard stays; no lifecycle guard wraps it."""
         module = self._module(
             aliases={
                 "idx_t": {"underlying": "u32", "qualified": True, "lifecycle": UNSTABLE}
@@ -724,15 +770,18 @@ class TestUnstableGating:
         )
         content = self._generate(module, self._metadata(), tmp_path)
         assert (
-            "#ifdef DUCKDB_V2_API_UNSTABLE\n"
+            "/*!\n"
+            " * history:\n"
+            " * - unstable: v1.0.0\n"
+            " */\n"
             "#ifndef DUCKDB_V2_TYPEDEF_IDX_T\n"
             "#define DUCKDB_V2_TYPEDEF_IDX_T\n"
             "typedef uint32_t idx_t;\n"
-            "#endif\n"
             "#endif" in content
         )
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
 
-    def test_unstable_tagged_struct_handle_is_guarded(self, tmp_path):
+    def test_unstable_tagged_struct_handle_is_not_guarded(self, tmp_path):
         module = self._module(handles={"scratch": {"lifecycle": UNSTABLE}})
         content = self._generate(
             module,
@@ -741,31 +790,239 @@ class TestUnstableGating:
             options={"handles": {"default_style": "tagged_struct"}},
         )
         assert (
-            "#ifdef DUCKDB_V2_API_UNSTABLE\ntypedef struct _duckdb_v2_scratch {"
+            "/*!\n * history:\n * - unstable: v1.0.0\n */\ntypedef struct _duckdb_v2_scratch {"
             in content
         )
-        assert "} * duckdb_v2_scratch_ptr;\n#endif" in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
 
-    def test_unstable_and_deprecated_guards_nest(self, tmp_path):
-        """Unstable wraps outside; deprecated nests inside; closed in reverse."""
-        module = self._module(
-            functions={
-                "old_poke": {
+
+class TestRenames:
+    """A renamed construct keeps its old spelling for targets that still had it."""
+
+    def _meta(self):
+        return {
+            "schema_version": "0.6",
+            "versions": ["v1.0.0", "v1.4.0"],
+            "prefix": "duckdb_v2_",
+            "lifecycle_states": {"stable": {"visibility": "always"}},
+            "suffixes": {"handles": "_ptr", "callbacks": "_cb", "aliases": "_t"},
+            "primitives": [{"name": "i32", "c_type": "int32_t"}],
+        }
+
+    def _mod(self):
+        return {
+            "module": "m",
+            "handles": {
+                "bignum": {
+                    "lifecycle": [["stable", "v1.0.0", "2025-01-01"]],
+                    "renamed_from": {"name": "varint", "version": "v1.4.0"},
+                }
+            },
+            "callbacks": {},
+            "aliases": {},
+            "structs": {},
+            "enums": {},
+            "constants": {},
+            "functions": {
+                "get_bignum": {
                     "return_type": "i32",
                     "return_pointer": 0,
                     "return_const": False,
                     "parameters": {},
-                    "deprecated": "v1.0.0",
-                    "lifecycle": UNSTABLE,
+                    "lifecycle": [["stable", "v1.0.0", "2025-01-01"]],
+                    "renamed_from": {"name": "get_varint", "version": "v1.4.0"},
                 }
-            }
-        )
-        content = self._generate(module, self._metadata(), tmp_path)
+            },
+        }
+
+    def _gen(self, tmp_path):
+        out = tmp_path / "out.h"
+        generate([self._mod()], self._meta(), out)
+        return out.read_text()
+
+    def test_function_alias_is_a_macro_below_the_rename(self, tmp_path):
+        content = self._gen(tmp_path)
         assert (
-            "#ifdef DUCKDB_V2_API_UNSTABLE\n#ifndef DUCKDB_V2_API_NO_DEPRECATED"
-            in content
+            "#if DUCKDB_V2_API_VERSION_BELOW(1, 4, 0)\n"
+            "//! Renamed to duckdb_v2_get_bignum in v1.4.0.\n"
+            "#define duckdb_v2_get_varint duckdb_v2_get_bignum\n"
+            "#endif" in content
         )
-        assert "duckdb_v2_old_poke(void);\n#endif\n#endif" in content
+
+    def test_type_alias_is_a_typedef(self, tmp_path):
+        content = self._gen(tmp_path)
+        assert "typedef duckdb_v2_bignum_ptr duckdb_v2_varint_ptr;" in content
+
+    def test_no_section_without_renames(self, tmp_path):
+        mod = self._mod()
+        del mod["handles"]["bignum"]["renamed_from"]
+        del mod["functions"]["get_bignum"]["renamed_from"]
+        out = tmp_path / "out.h"
+        generate([mod], self._meta(), out)
+        assert "Renamed constructs" not in out.read_text()
+
+
+class TestRenameValidation:
+    def _modules(self, old_name="varint", version="v1.4.0", extra=None):
+        mod = {
+            "module": "m",
+            "handles": {
+                "bignum": {
+                    "lifecycle": [["stable", "v1.0.0", "2025-01-01"]],
+                    "renamed_from": {"name": old_name, "version": version},
+                }
+            },
+            "callbacks": {},
+            "aliases": {},
+            "structs": {},
+            "enums": {},
+            "constants": {},
+            "functions": {},
+        }
+        if extra:
+            mod["handles"].update(extra)
+        return [mod]
+
+    def _meta(self):
+        return {
+            "schema_version": "0.6",
+            "versions": ["v1.0.0", "v1.4.0"],
+            "prefix": "",
+            "lifecycle_states": {"stable": {"visibility": "always"}},
+            "suffixes": {"handles": "", "callbacks": "", "aliases": ""},
+            "primitives": [{"name": "i32", "c_type": "int32_t"}],
+        }
+
+    def test_valid_rename_accepted(self):
+        assert validate_semantics(self._modules(), self._meta()) == []
+
+    def test_unknown_version_rejected(self):
+        errors = validate_semantics(self._modules(version="v9.9.9"), self._meta())
+        assert any("renamed_from names unknown version" in e for e in errors)
+
+    def test_old_name_colliding_with_a_live_construct_rejected(self):
+        """Reviving a name that still means something else would be ambiguous."""
+        live = {"varint": {"lifecycle": [["stable", "v1.0.0", "2025-01-01"]]}}
+        errors = validate_semantics(self._modules(extra=live), self._meta())
+        assert any("is also a live construct" in e for e in errors)
+
+
+class TestVersionGating:
+    """Constructs gate on the version a translation unit targets, not only on state."""
+
+    def _meta(self, **extra):
+        meta = {
+            "schema_version": "0.6",
+            "versions": ["v1.2.0", "v1.5.6"],
+            "prefix": "duckdb_v2_",
+            "lifecycle_states": {
+                "unstable": {"visibility": "opt_in", "guard": "DUCKDB_V2_API_UNSTABLE"},
+                "stable": {"visibility": "always"},
+                "deprecated": {
+                    "visibility": "opt_out",
+                    "guard": "DUCKDB_V2_API_NO_DEPRECATED",
+                },
+            },
+            "suffixes": {"handles": "_ptr", "callbacks": "_cb", "aliases": "_t"},
+            "primitives": [{"name": "i32", "c_type": "int32_t"}],
+        }
+        meta.update(extra)
+        return meta
+
+    def _mod(self, lifecycle):
+        # Only functions gate, so the carrier has to be one.
+        return {
+            "module": "m",
+            "handles": {},
+            "callbacks": {},
+            "aliases": {},
+            "structs": {},
+            "enums": {},
+            "constants": {},
+            "functions": {
+                "thing": {
+                    "return_type": "i32",
+                    "return_pointer": 0,
+                    "return_const": False,
+                    "parameters": {},
+                    "lifecycle": lifecycle,
+                }
+            },
+        }
+
+    def _gen(self, meta, module, tmp_path):
+        out = tmp_path / "out.h"
+        generate([module], meta, out)
+        return out.read_text()
+
+    def test_target_defaults_to_the_latest_declared_version(self, tmp_path):
+        content = self._gen(
+            self._meta(), self._mod([["stable", "v1.2.0", "2025-01-01"]]), tmp_path
+        )
+        assert "#define DUCKDB_V2_API_VERSION_MAJOR 1" in content
+        assert "#define DUCKDB_V2_API_VERSION_MINOR 5" in content
+        assert "#define DUCKDB_V2_API_VERSION_PATCH 6" in content
+
+    def test_all_or_none_guard_is_emitted(self, tmp_path):
+        content = self._gen(
+            self._meta(), self._mod([["stable", "v1.2.0", "2025-01-01"]]), tmp_path
+        )
+        assert "#error" in content and "all or none" in content
+
+    def test_comparison_macros_are_emitted(self, tmp_path):
+        content = self._gen(
+            self._meta(), self._mod([["stable", "v1.2.0", "2025-01-01"]]), tmp_path
+        )
+        assert "#define DUCKDB_V2_API_VERSION_AT_LEAST(x, y, z)" in content
+        assert "#define DUCKDB_V2_API_VERSION_BELOW(x, y, z)" in content
+
+    def test_deprecation_is_relative_to_the_target(self, tmp_path):
+        """Deprecated after the target means not yet deprecated, so opt-out must not hide it."""
+        content = self._gen(
+            self._meta(),
+            self._mod(
+                [
+                    ["deprecated", "v1.5.6", "2026-07-30"],
+                    ["stable", "v1.2.0", "2025-01-01"],
+                ]
+            ),
+            tmp_path,
+        )
+        assert (
+            "#if (DUCKDB_V2_API_VERSION_BELOW(1, 5, 6) || "
+            "DUCKDB_V2_API_ALLOW_DEPRECATED)" in content
+        )
+
+    def test_stable_construct_is_ungated(self, tmp_path):
+        content = self._gen(
+            self._meta(), self._mod([["stable", "v1.2.0", "2025-01-01"]]), tmp_path
+        )
+        body = content.split("General type definitions")[1]
+        assert "duckdb_v2_thing(void);" in body
+        assert "DUCKDB_V2_API_NO_DEPRECATED" not in body
+
+    def test_unstable_still_gates_on_the_guard_alone(self, tmp_path):
+        content = self._gen(
+            self._meta(), self._mod([["unstable", "v1.2.0", "2025-01-01"]]), tmp_path
+        )
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" in content
+
+    def test_version_macro_name_is_spec_level(self, tmp_path):
+        """metadata.version_macro renames the macros and every gate that uses them."""
+        meta = self._meta(version_macro="MY_VER")
+        content = self._gen(
+            meta,
+            self._mod(
+                [
+                    ["deprecated", "v1.5.6", "2026-07-30"],
+                    ["stable", "v1.2.0", "2025-01-01"],
+                ]
+            ),
+            tmp_path,
+        )
+        assert "#define MY_VER_AT_LEAST(x, y, z)" in content
+        assert "MY_VER_BELOW(1, 5, 6)" in content
+        assert "DUCKDB_V2_API_VERSION_AT_LEAST" not in content
 
 
 class TestSchemaVersion:
@@ -774,7 +1031,7 @@ class TestSchemaVersion:
         spec = tmp_path / "spec"
         spec.mkdir()
         (spec / "metadata.yaml").write_text(
-            "versions: ['1.0.0']\nprimitives: [opaque]\n"
+            "version: ['1.0.0']\nprimitives: [opaque]\n"
         )
         with pytest.raises(jsonschema.ValidationError, match="schema_version"):
             load_metadata(spec)
@@ -818,7 +1075,7 @@ class TestCompile:
         test_c = tmp_path / "test.c"
         test_c.write_text(
             '#include "duckdb_v2.h"\n'
-            "int main(void) { duckdb_v2_scratch_ptr s = 0; return !!s; }\n"
+            "int main(void) { return (int)duckdb_v2_scratch_create(0, 0); }\n"
         )
 
         without = subprocess.run(
@@ -826,7 +1083,7 @@ class TestCompile:
             capture_output=True,
             text=True,
         )
-        assert without.returncode != 0, "unstable type visible without opt-in"
+        assert without.returncode != 0, "unstable function visible without opt-in"
 
         with_optin = subprocess.run(
             [

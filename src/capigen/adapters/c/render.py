@@ -91,7 +91,6 @@ class CFunction:
     static_inline: bool = False
     omitted: bool = False
     guard_directive: str = ""  # "#ifdef X" / "#ifndef X"; empty means no wrap
-    deprecated_gate: bool = False  # legacy `deprecated` field: wrap in #ifndef
     parameters: dict[str, CParam] = field(default_factory=dict)
 
 
@@ -118,6 +117,15 @@ class CConstant:
 
 
 @dataclass
+class CRemoved:
+    """A construct that no longer exists, kept as a tombstone in the header."""
+
+    name: str
+    version: str
+    kind: str
+
+
+@dataclass
 class CModule:
     name: str
     types: list[CTypeDef]
@@ -126,3 +134,4 @@ class CModule:
     constants: list[CConstant]
     function_ptrs: list[CFuncPtr]
     functions: dict[str, CFunction]
+    removed: list[CRemoved] = field(default_factory=list)

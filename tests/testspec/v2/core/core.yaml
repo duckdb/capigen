@@ -26,6 +26,8 @@ constants:
     value: 0xFFFFFFFF
 functions:
   open:
+    lifecycle:
+      - ["stable", "v1.0.0", "2026-01-01"]
     description: "Opens a database."
     return_type: API_CALL
     return_pointer: 0
@@ -45,6 +47,8 @@ functions:
         const: false
         kind: OUT
   close:
+    lifecycle:
+      - ["stable", "v1.0.0", "2026-01-01"]
     description: "Closes a database."
     return_type: API_CALL
     return_pointer: 0

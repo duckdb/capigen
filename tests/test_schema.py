@@ -101,7 +101,7 @@ class TestMetadataStates:
 
     def _metadata(self, states):
         return {
-            "schema_version": "0.5",
+            "schema_version": "0.6",
             "versions": ["v1.0.0"],
             "suffixes": {"handles": "_h", "callbacks": "_cb", "aliases": "_t"},
             "primitives": [{"name": "u32", "c_type": "uint32_t"}],
@@ -240,7 +240,7 @@ class TestAdapterOptionSchemas:
     def test_metadata_rejects_an_options_block(self):
         """metadata.yaml is pure spec; adapter options live in options/<adapter>.yaml."""
         meta = {
-            "schema_version": "0.5",
+            "schema_version": "0.6",
             "versions": ["v1.0.0"],
             "suffixes": {"handles": "_h", "callbacks": "_cb", "aliases": "_t"},
             "primitives": [{"name": "u32", "c_type": "uint32_t"}],

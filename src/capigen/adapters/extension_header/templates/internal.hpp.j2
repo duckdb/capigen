@@ -6,16 +6,8 @@
 // Function pointer struct
 //===--------------------------------------------------------------------===//
 typedef struct {
-{% for region in regions %}
-	{{ region.comment }}
-{% if region.gap %}
-
-{% endif %}
-{% for sig in region.members %}
-	{{ sig }};
-{% endfor %}
-{% endfor %}
-{% for sig in appended %}
+	// v{{ api_version }}
+{% for sig in members %}
 	{{ sig }};
 {% endfor %}
 } {{ typename }};

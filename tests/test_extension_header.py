@@ -9,14 +9,7 @@ import pytest
 
 from capigen.loader import load_metadata, load_modules
 from capigen.validate import validate_semantics
-from capigen.adapters.extension_header import (
-    _extract_defines,
-    _extract_struct,
-    _member_types,
-    _normalize,
-    _param_type,
-    generate,
-)
+from capigen.adapters.extension_header import generate
 
 EXT_SPEC = Path(__file__).parent / "testspec" / "ext"
 TEMPLATE = EXT_SPEC / "template.h.in"
@@ -25,6 +18,8 @@ EXT_OPTIONS = {
     "version_macro_prefix": "EXT_API_VERSION",
     "internal_include": "ext.h",
     "exclude_functions": ["skipme"],
+    "api_variable": "ext_api",
+    "struct_typename": "ext_api",
 }
 HAS_CC = shutil.which("cc") is not None
 
@@ -54,21 +49,22 @@ def _run(tmp_path, template_text=None):
     return consumer.read_text(), internal.read_text()
 
 
-def _fn(ret="i32", params=None, static_inline=False):
-    """Build a minimal spec function dict."""
+def _fn(ret="i32", params=None, static_inline=False, lifecycle=None):
+    """Build a minimal spec function dict. Every function must be dated."""
     return {
         "return_type": ret,
         "return_pointer": 0,
         "return_const": False,
         "static_inline": static_inline,
         "parameters": params or {},
+        "lifecycle": lifecycle or [["stable", "v1.0.0", "2026-01-01"]],
     }
 
 
 def _run_inline(tmp_path, functions, template_text, exclude=None):
     """Run generate against an inline single-module spec (full control over spec order)."""
     metadata = {
-        "schema_version": "0.5",
+        "schema_version": "0.6",
         "prefix": "t_",
         "versions": ["v1.0.0"],
         "suffixes": {"handles": "", "callbacks": "", "aliases": ""},
@@ -87,6 +83,8 @@ def _run_inline(tmp_path, functions, template_text, exclude=None):
         "version_macro_prefix": "T_VERSION",
         "internal_include": "t.h",
         "exclude_functions": exclude or [],
+        "api_variable": "t_api",
+        "struct_typename": "t_api",
     }
     module = {
         "module": "m",
@@ -115,23 +113,17 @@ def _run_inline(tmp_path, functions, template_text, exclude=None):
 
 
 # A minimal inline template: one stable member plus empty append markers.
-def _inline_template(members, defines):
-    member_block = "\n".join(f"\t{m}" for m in members)
-    define_block = "\n".join(f"#define {d} t_api.{d}" for d in defines)
-    return f"""#pragma once
+def _inline_template(members=None, defines=None):
+    """A skeleton. The struct body and the mappings are generated from the spec,
+    so the arguments only document what the caller expects to appear."""
+    return """#pragma once
 
-typedef struct {{
-#if T_VERSION_MINOR > 0 || (T_VERSION_MINOR == 0 && T_VERSION_PATCH >= 0) // v1.0.0
-{member_block}
-#endif
-
+typedef struct {
 	// capigen:begin appended
 	// capigen:end appended
-}} t_api;
+} t_api;
 
 #ifndef T_STATIC
-{define_block}
-
 // capigen:begin appended
 // capigen:end appended
 #endif // T_STATIC
@@ -157,231 +149,42 @@ STRUCT_SAMPLE = """typedef struct {
 """
 
 
-class TestExtractStruct:
-    def test_typename(self):
-        typename, _ = _extract_struct(STRUCT_SAMPLE)
-        assert typename == "sample_api_t"
-
-    def test_multiple_stable_and_unstable_regions(self):
-        _, regions = _extract_struct(STRUCT_SAMPLE)
-        kinds = [(r.kind, r.version or r.description) for r in regions]
-        assert kinds == [
-            ("stable", "1.0.0"),
-            ("stable", "1.1.0"),
-            ("unstable", "group two"),
-        ]
-
-    def test_member_order_and_names(self):
-        _, regions = _extract_struct(STRUCT_SAMPLE)
-        names = [m.name for r in regions for m in r.members]
-        assert names == ["a_open", "a_cb_setter", "a_noop", "a_more", "a_wrapped"]
-
-    def test_function_pointer_parameter_name_is_outer(self):
-        # The member name is the outer (*a_cb_setter), not the inner (*cb).
-        _, regions = _extract_struct(STRUCT_SAMPLE)
-        member = regions[0].members[1]
-        assert member.name == "a_cb_setter"
-        # The nested function-pointer parameter survives extraction.
-        assert "(*cb)(int32_t x, int32_t y)" in member.signature
-
-    def test_function_pointer_parameter_split(self):
-        _, regions = _extract_struct(STRUCT_SAMPLE)
-        _, params = _member_types(regions[0].members[1].signature)
-        assert len(params) == 2
-        assert "(*)" in params[0]
-
-    def test_zero_parameter_member(self):
-        _, regions = _extract_struct(STRUCT_SAMPLE)
-        noop = regions[0].members[2]
-        assert noop.name == "a_noop"
-        _, params = _member_types(noop.signature)
-        assert params == ["void"]
-
-    def test_wrapped_member_joined_to_single_line(self):
-        _, regions = _extract_struct(STRUCT_SAMPLE)
-        wrapped = regions[2].members[0]
-        assert wrapped.name == "a_wrapped"
-        assert "\n" not in wrapped.signature
-        assert (
-            wrapped.signature == "int64_t (*a_wrapped)(int32_t first, int32_t second)"
-        )
-
-    def test_stray_comment_not_a_member(self):
-        _, regions = _extract_struct(STRUCT_SAMPLE)
-        # The unstable region has only the real member, and its description is the
-        # group comment, not the stray in-region comment.
-        assert [m.name for m in regions[2].members] == ["a_wrapped"]
-        assert regions[2].description == "group two"
-        assert regions[2].guard == "GUARD"
-
-    def test_missing_struct_errors(self):
-        with pytest.raises(ValueError, match="typedef struct"):
-            _extract_struct("no struct here")
-
-    def test_unclosed_struct_errors(self):
-        with pytest.raises(ValueError, match="not closed"):
-            _extract_struct("typedef struct {\n\tint (*a)(void);\n")
-
-
-class TestExtractDefines:
-    def test_api_var_and_order(self):
-        api_var, names = _extract_defines(TEMPLATE.read_text())
-        assert api_var == "ext_api"
-        assert names == [
-            "ext_open",
-            "ext_close",
-            "ext_version",
-            "ext_flush",
-            "ext_get_kind",
-        ]
-
-    def test_inconsistent_api_var_errors(self):
-        text = TEMPLATE.read_text().replace(
-            "#define ext_close    ext_api.ext_close",
-            "#define ext_close    other_api.ext_close",
-        )
-        with pytest.raises(ValueError, match="inconsistent api variables"):
-            _extract_defines(text)
-
-    def test_lhs_rhs_mismatch_errors(self):
-        text = TEMPLATE.read_text().replace(
-            "#define ext_close    ext_api.ext_close",
-            "#define ext_close    ext_api.ext_open",
-        )
-        with pytest.raises(ValueError, match="ext_close"):
-            _extract_defines(text)
-
-    def test_backslash_wrapped_define_is_joined(self):
-        text = (
-            "#ifndef X\n"
-            "#define ext_open ext_api.ext_open\n"
-            "#define ext_a_very_long_function_name                                    \\\n"
-            "\text_api.ext_a_very_long_function_name\n"
-            "#endif\n"
-        )
-        api_var, names = _extract_defines(text)
-        assert api_var == "ext_api"
-        assert names == ["ext_open", "ext_a_very_long_function_name"]
-
-
-class TestNormalize:
-    def test_whitespace_and_star_spacing(self):
-        ident = lambda t: t  # noqa: E731
-        assert _normalize("const char  *", ident) == _normalize("const char*", ident)
-        assert _normalize("const  char *", ident) == _normalize("const char *", ident)
-
-    def test_param_type_strips_name(self):
-        assert _param_type("const char *path") == "const char *"
-        assert _param_type("idx_t col") == "idx_t"
-        assert _param_type("void") == "void"
-
-
-class TestVerify:
-    def test_passes_on_frozen_template(self, tmp_path):
-        # No exception, and both outputs are produced.
-        consumer, internal = _run(tmp_path)
-        assert "typedef struct" in consumer
-        assert "CreateExtAPI" in internal
-
-    def test_alias_and_enum_spelling_verify_equal(self, tmp_path):
-        # The template spells the return as `ext_kind`; the spec renders `EXT_KIND`.
-        # The declared alias makes them equivalent, so verification passes.
-        consumer, _ = _run(tmp_path)
-        assert "ext_get_kind" in consumer
-
-    def test_whitespace_differences_pass(self, tmp_path):
-        text = TEMPLATE.read_text().replace(
-            "int32_t (*ext_open)(const char *path, ext_db *out_db);",
-            "int32_t   (*ext_open)( const char  *path ,  ext_db  *out_db );",
-        )
-        # Should not raise.
-        _run(tmp_path, text)
-
-    def test_changed_param_type_fails(self, tmp_path):
-        text = TEMPLATE.read_text().replace(
-            "int32_t (*ext_open)(const char *path, ext_db *out_db);",
-            "int32_t (*ext_open)(const char *path, ext_db out_db);",
-        )
-        with pytest.raises(ValueError, match="signature mismatch for 'ext_open'"):
-            _run(tmp_path, text)
-
-    def test_return_type_int_width_fails(self, tmp_path):
-        text = TEMPLATE.read_text().replace(
-            "int32_t (*ext_flush)(ext_db db);",
-            "int64_t (*ext_flush)(ext_db db);",
-        )
-        with pytest.raises(ValueError, match="signature mismatch for 'ext_flush'"):
-            _run(tmp_path, text)
-
-    def test_missing_const_fails(self, tmp_path):
-        text = TEMPLATE.read_text().replace(
-            "int32_t (*ext_open)(const char *path, ext_db *out_db);",
-            "int32_t (*ext_open)(char *path, ext_db *out_db);",
-        )
-        with pytest.raises(ValueError, match="signature mismatch for 'ext_open'"):
-            _run(tmp_path, text)
-
-    def test_unknown_template_member_fails(self, tmp_path):
-        # Add both the member and its define so the bijection passes and verify runs.
-        text = (
-            TEMPLATE.read_text()
-            .replace(
-                "	int32_t (*ext_flush)(ext_db db);",
-                "	int32_t (*ext_flush)(ext_db db);\n	void (*ext_bogus)(void);",
-            )
-            .replace(
-                "#define ext_flush    ext_api.ext_flush",
-                "#define ext_flush    ext_api.ext_flush\n#define ext_bogus ext_api.ext_bogus",
-            )
-        )
-        with pytest.raises(
-            ValueError, match="'ext_bogus' is not a declared spec function"
-        ):
-            _run(tmp_path, text)
-
-    def test_spec_removed_member_fails(self, tmp_path):
-        # A member whose spec function no longer exists reads as an unknown member.
-        modules, metadata = _load()
-        for mod in modules:
-            mod["functions"].pop("flush", None)
-        tmp_path.mkdir(parents=True, exist_ok=True)
-        template = tmp_path / "t.in"
-        template.write_text(TEMPLATE.read_text())
-        with pytest.raises(
-            ValueError, match="'ext_flush' is not a declared spec function"
-        ):
-            generate(
-                modules,
-                metadata,
-                tmp_path / "o.h",
-                template=template,
-                internal_out=tmp_path / "i.hpp",
-                options=EXT_OPTIONS,
-            )
-
-    def test_static_inline_member_fails(self, tmp_path):
-        template = _inline_template(["int32_t (*t_one)(void);"], ["t_one"])
-        with pytest.raises(ValueError, match="static_inline"):
-            _run_inline(tmp_path, {"one": _fn(static_inline=True)}, template)
-
-
 class TestAppend:
     def test_renders_in_both_regions(self, tmp_path):
         consumer, _ = _run(tmp_path)
-        # Struct region append, wrapped in the unstable guard.
+        # The struct member is unconditional...
+        assert "\tvoid (*ext_extra_one)(ext_db db);" in consumer
+        # ...and the switch the C header uses gates the macro instead.
         assert (
-            "#ifdef EXT_API_UNSTABLE\n\tvoid (*ext_extra_one)(ext_db db);" in consumer
+            "#if EXT_API_ALLOW_UNSTABLE\n"
+            "#define ext_extra_one ext_api.ext_extra_one\n"
+            "#endif" in consumer
         )
         # Define region append.
         assert "#define ext_extra_one ext_api.ext_extra_one" in consumer
         assert "#define ext_extra_two ext_api.ext_extra_two" in consumer
 
-    def test_struct_appends_inside_unstable_guard(self, tmp_path):
+    def test_struct_bands_are_contiguous_runs(self, tmp_path):
+        """One gate per band, wrapping a run; the not-yet-stable tail comes last."""
         consumer, _ = _run(tmp_path)
         region = consumer[consumer.index("// capigen:begin appended") :]
         region = region[: region.index("// capigen:end appended")]
-        assert "#ifdef EXT_API_UNSTABLE" in region
-        assert "#endif" in region
+        # the floor band needs no gate at all
+        assert region.index("ext_open") < region.index("#if")
+        # exactly two gated regions: the v1.1.0 band and the unstable tail
+        assert region.count("#if ") == 2 and region.count("#endif") == 2
+        assert "#if EXT_API_VERSION_AT_LEAST(1, 1, 0)" in region
+        assert region.index("EXT_API_VERSION_AT_LEAST") < region.index(
+            "EXT_API_ALLOW_UNSTABLE"
+        )
+
+    def test_unstable_tail_is_last(self, tmp_path):
+        _, internal = _run(tmp_path)
+        struct = internal[
+            internal.index("typedef struct") : internal.index("} ext_api;")
+        ]
+        names = re.findall(r"\(\*(\w+)\)", struct)
+        assert names[-3:] == ["ext_flush", "ext_get_kind", "ext_extra_one"]
 
     def test_zero_param_append_renders_void(self, tmp_path):
         consumer, _ = _run(tmp_path)
@@ -404,12 +207,12 @@ class TestAppend:
             internal.index("typedef struct") : internal.index("} ext_api;")
         ]
         names = re.findall(r"\(\*(\w+)\)", struct)
-        assert names[-2:] == ["ext_extra_one", "ext_extra_two"]
+        assert names[-2:] == ["ext_get_kind", "ext_extra_one"]
 
     def test_appended_members_at_end_of_create_method(self, tmp_path):
         _, internal = _run(tmp_path)
         assigns = re.findall(r"result\.(\w+) =", internal)
-        assert assigns[-2:] == ["ext_extra_one", "ext_extra_two"]
+        assert assigns[-2:] == ["ext_get_kind", "ext_extra_one"]
 
 
 class TestEngineSide:
@@ -423,10 +226,10 @@ class TestEngineSide:
             "ext_open",
             "ext_close",
             "ext_version",
+            "ext_extra_two",
             "ext_flush",
             "ext_get_kind",
             "ext_extra_one",
-            "ext_extra_two",
         ]
 
     def test_every_member_assigned_in_create_method(self, tmp_path):
@@ -441,21 +244,19 @@ class TestEngineSide:
     def test_version_defines(self, tmp_path):
         _, internal = _run(tmp_path)
         assert "#define EXT_API_VERSION_MAJOR 1" in internal
-        assert "#define EXT_API_VERSION_MINOR 0" in internal
+        assert "#define EXT_API_VERSION_MINOR 1" in internal
         assert "#define EXT_API_VERSION_PATCH 0" in internal
-        assert '#define EXT_API_VERSION_STRING "v1.0.0"' in internal
+        assert '#define EXT_API_VERSION_STRING "v1.1.0"' in internal
 
-    def test_region_comments_preserved(self, tmp_path):
+    def test_version_banner_present(self, tmp_path):
         _, internal = _run(tmp_path)
-        assert "// v1.0.0" in internal
-        assert "// Flush support" in internal
-        assert "// Kind support" in internal
+        assert "// v1.1.0" in internal
 
     def test_full_member_line_rendered(self, tmp_path):
         # A name-preserving signature mangle must be caught: assert the full line.
         _, internal = _run(tmp_path)
-        assert "\tint32_t (*ext_open)(const char *path, ext_db *out_db);" in internal
-        assert "\tconst char *(*ext_version)(void);" in internal
+        assert "\tint32_t (*ext_open)(const char* path, ext_db* out_db);" in internal
+        assert "\tconst char* (*ext_version)(void);" in internal
 
     def test_byte_stable_across_two_runs(self, tmp_path):
         _, i1 = _run(tmp_path / "a")
@@ -486,35 +287,25 @@ class TestStatesIntegration:
     """The appended-region guard comes from the declared unstable state."""
 
     def test_appended_region_uses_declared_guard(self, tmp_path):
-        functions = {"base": _fn(), "extra": _fn()}
+        extra = _fn()
+        extra["lifecycle"] = [["unstable", "v1.0.0", "2026-01-01"]]
+        functions = {"base": _fn(), "extra": extra}
         template = _inline_template(["int32_t (*t_base)(void);"], ["t_base"])
         consumer, _ = _run_inline(tmp_path, functions, template)
-        assert "#ifdef T_UNSTABLE\n\tint32_t (*t_extra)(void);" in consumer
+        assert (
+            "#if T_API_ALLOW_UNSTABLE\n#define t_extra t_api.t_extra\n#endif"
+            in consumer
+        )
 
-    def test_missing_unstable_state_errors(self, tmp_path):
-        modules, metadata = _load()
-        metadata["lifecycle_states"] = {"stable": {"visibility": "always"}}
-        tmp_path.mkdir(parents=True, exist_ok=True)
-        template = tmp_path / "t.in"
-        template.write_text(TEMPLATE.read_text())
-        with pytest.raises(ValueError, match="requires an 'unstable' state"):
-            generate(
-                modules,
-                metadata,
-                tmp_path / "o.h",
-                template=template,
-                internal_out=tmp_path / "i.hpp",
-                options=EXT_OPTIONS,
-            )
-
-    def test_omitted_function_is_not_appended(self, tmp_path):
+    def test_omitted_function_keeps_a_slot_but_no_name(self, tmp_path):
         gone = _fn()
         gone["lifecycle"] = [["removed", "v1.0.0", "2026-01-01"]]
         functions = {"base": _fn(), "gone": gone, "extra": _fn()}
         template = _inline_template(["int32_t (*t_base)(void);"], ["t_base"])
         consumer, internal = _run_inline(tmp_path, functions, template)
-        assert "t_gone" not in consumer
-        assert "t_gone" not in internal
+        assert "int32_t (*t_gone)(void);" in consumer  # the slot survives
+        assert "#define t_gone " not in consumer  # the name does not
+        assert "result.t_gone = nullptr;" in internal
         assert "t_extra" in consumer
 
     def test_template_member_for_omitted_function_keeps_slot_as_nullptr(self, tmp_path):
@@ -555,57 +346,6 @@ class TestStatesIntegration:
         assert result.returncode == 0, result.stderr
 
 
-class TestDerivedStructVersion:
-    """The struct's version comes from the template's newest stable region tag."""
-
-    def test_version_defines_derive_from_newest_stable_region(self, tmp_path):
-        functions = {"base": _fn(), "more": _fn()}
-        template = (
-            "#pragma once\n\n"
-            "typedef struct {\n"
-            "#if T_VERSION_MINOR > 0 // v1.0.0\n"
-            "\tint32_t (*t_base)(void);\n"
-            "#endif\n"
-            "#if T_VERSION_MINOR > 2 // v1.2.0\n"
-            "\tint32_t (*t_more)(void);\n"
-            "#endif\n\n"
-            "\t// capigen:begin appended\n"
-            "\t// capigen:end appended\n"
-            "} t_api;\n\n"
-            "#ifndef T_STATIC\n"
-            "#define t_base t_api.t_base\n"
-            "#define t_more t_api.t_more\n\n"
-            "// capigen:begin appended\n"
-            "// capigen:end appended\n"
-            "#endif // T_STATIC\n"
-        )
-        _, internal = _run_inline(tmp_path, functions, template)
-        assert "#define T_VERSION_MAJOR 1" in internal
-        assert "#define T_VERSION_MINOR 2" in internal
-        assert '#define T_VERSION_STRING "v1.2.0"' in internal
-
-    def test_template_without_stable_region_errors(self, tmp_path):
-        functions = {"base": _fn()}
-        template = (
-            "#pragma once\n\n"
-            "typedef struct {\n"
-            "// group\n"
-            "#ifdef T_UNSTABLE\n"
-            "\tint32_t (*t_base)(void);\n"
-            "#endif\n\n"
-            "\t// capigen:begin appended\n"
-            "\t// capigen:end appended\n"
-            "} t_api;\n\n"
-            "#ifndef T_STATIC\n"
-            "#define t_base t_api.t_base\n\n"
-            "// capigen:begin appended\n"
-            "// capigen:end appended\n"
-            "#endif // T_STATIC\n"
-        )
-        with pytest.raises(ValueError, match="no stable '// vX.Y.Z' region"):
-            _run_inline(tmp_path, functions, template)
-
-
 class TestMissingArguments:
     def test_template_required(self, tmp_path):
         modules, metadata = _load()
@@ -620,163 +360,90 @@ class TestMissingArguments:
             generate(modules, metadata, tmp_path / "o.h", template=TEMPLATE)
 
 
-class TestEmptyAppend:
-    """The real V1 case: nothing to append, both marker regions stay empty."""
+class TestAppendOrder:
+    """Appends are ordered by the spec's own facts, never by how its files are arranged."""
 
-    def test_consumer_equals_template_with_markers_emptied(self, tmp_path):
-        modules, metadata = _load()
-        template = EXT_SPEC / "template_full.h.in"
-        consumer = tmp_path / "out.h"
-        internal = tmp_path / "i.hpp"
-        generate(
-            modules,
-            metadata,
-            consumer,
-            template=template,
-            internal_out=internal,
-            options=EXT_OPTIONS,
-        )
-        # No appends: output is the template verbatim (markers present, regions empty).
-        assert consumer.read_text() == template.read_text()
-        assert (
-            "// capigen:begin appended\n\t// capigen:end appended"
-            in consumer.read_text()
-        )
+    def _struct_members(self, internal):
+        struct = internal[internal.index("typedef struct") : internal.index("} t_api;")]
+        return re.findall(r"\(\*(\w+)\)", struct)
 
-    def test_engine_struct_has_exactly_template_members(self, tmp_path):
-        modules, metadata = _load()
-        template = EXT_SPEC / "template_full.h.in"
-        internal = tmp_path / "i.hpp"
-        generate(
-            modules,
-            metadata,
-            tmp_path / "o.h",
-            template=template,
-            internal_out=internal,
-            options=EXT_OPTIONS,
-        )
-        text = internal.read_text()
-        struct = text[text.index("typedef struct") : text.index("} ext_api;")]
-        assert re.findall(r"\(\*(\w+)\)", struct) == [
-            "ext_open",
-            "ext_close",
-            "ext_version",
-            "ext_flush",
-            "ext_get_kind",
-            "ext_extra_one",
-            "ext_extra_two",
-        ]
+    def test_undated_functions_append_by_name(self, tmp_path):
+        """Spec order is [base, zeta, alpha]; with no dates, name decides.
 
-
-class TestAppendOrderIsSpecOrder:
-    """Appends follow loader order, not alphabetical order."""
-
-    def test_non_alphabetical_loader_order_preserved(self, tmp_path):
-        # Loader/spec order is [t_base, t_zeta, t_alpha]; alphabetical would swap the appends.
+        Reordering or resplitting the spec files must not move an ABI slot, so
+        file arrangement is deliberately not part of the key.
+        """
         functions = {"base": _fn(), "zeta": _fn(), "alpha": _fn()}
         template = _inline_template(["int32_t (*t_base)(void);"], ["t_base"])
         consumer, internal = _run_inline(tmp_path, functions, template)
+        assert self._struct_members(internal) == ["t_alpha", "t_base", "t_zeta"]
+        assert consumer.index("t_alpha") < consumer.index("t_zeta")
+
+    def test_older_functions_append_first(self, tmp_path):
+        """Introduction date outranks name, so a new function lands at the end."""
+        early = _fn(lifecycle=[["stable", "v1.0.0", "2024-01-01"]])
+        late = _fn(lifecycle=[["stable", "v1.0.0", "2026-01-01"]])
+        base = _fn(lifecycle=[["stable", "v1.0.0", "2023-01-01"]])
+        functions = {"base": base, "aaa_new": late, "zzz_old": early}
+        template = _inline_template(["int32_t (*t_base)(void);"], ["t_base"])
+        _, internal = _run_inline(tmp_path, functions, template)
+        assert self._struct_members(internal) == ["t_base", "t_zzz_old", "t_aaa_new"]
+
+    def test_offset_pins_a_member_ahead_of_the_rule(self, tmp_path):
+        """An explicit offset reproduces an order laid down before the rule existed."""
+        pinned = _fn()
+        pinned["offset"] = 0
+        functions = {"base": _fn(), "aaa": _fn(), "zzz": pinned}
+        template = _inline_template(["int32_t (*t_base)(void);"], ["t_base"])
+        _, internal = _run_inline(tmp_path, functions, template)
+        assert self._struct_members(internal) == ["t_zzz", "t_aaa", "t_base"]
+
+
+class TestRemovedKeepsItsSlot:
+    """A removed function cannot vacate its slot, but must stop resolving."""
+
+    def _spec(self):
+        gone = _fn()
+        gone["lifecycle"] = [["removed", "v1.0.0", "2026-01-01"]]
+        return {"base": _fn(), "gone": gone}
+
+    def _template(self):
+        return _inline_template(
+            ["int32_t (*t_base)(void);", "int32_t (*t_gone)(void);"],
+            ["t_base", "t_gone"],
+        )
+
+    def test_slot_is_reserved_not_removed(self, tmp_path):
+        consumer, internal = _run_inline(tmp_path, self._spec(), self._template())
         struct = internal[internal.index("typedef struct") : internal.index("} t_api;")]
-        assert re.findall(r"\(\*(\w+)\)", struct) == ["t_base", "t_zeta", "t_alpha"]
-        # And the define region append preserves that order too.
-        assert consumer.index("t_zeta") < consumer.index("t_alpha")
+        # the engine still has every slot, so the layout is unchanged
+        assert re.findall(r"\(\*(\w+)\)", struct) == ["t_base", "t_gone"]
+        # the consumer keeps the slot too, so nothing after it shifts
+        assert "int32_t (*t_gone)(void);" in consumer
+
+    def test_mapping_macro_is_dropped(self, tmp_path):
+        consumer, _ = _run_inline(tmp_path, self._spec(), self._template())
+        assert "#define t_gone " not in consumer
+        assert "#define t_base " in consumer
+
+    def test_engine_assigns_nullptr_to_the_slot(self, tmp_path):
+        _, internal = _run_inline(tmp_path, self._spec(), self._template())
+        assert "nullptr" in internal
 
 
-class TestStructuralChecks:
-    """The restored strict cross-check and malformed-member guards."""
-
-    def test_wrapped_define_counts_toward_bijection(self, tmp_path):
-        # A backslash-wrapped define is seen, so the member<->define bijection holds.
-        functions = {"base": _fn(), "wrapped": _fn()}
-        template = (
-            "#pragma once\n\n"
-            "typedef struct {\n"
-            "#if T_VERSION_MINOR > 0 || (T_VERSION_MINOR == 0 && T_VERSION_PATCH >= 0) // v1.0.0\n"
-            "\tint32_t (*t_base)(void);\n"
-            "\tint32_t (*t_wrapped)(void);\n"
-            "#endif\n\n"
-            "\t// capigen:begin appended\n"
-            "\t// capigen:end appended\n"
-            "} t_api;\n\n"
-            "#ifndef T_STATIC\n"
-            "#define t_base t_api.t_base\n"
-            "#define t_wrapped                                                          \\\n"
-            "\tt_api.t_wrapped\n\n"
-            "// capigen:begin appended\n"
-            "// capigen:end appended\n"
-            "#endif // T_STATIC\n"
-        )
-        # Must not raise: the wrapped define satisfies the strict check.
-        _run_inline(tmp_path, functions, template)
-
-    def test_member_without_define_errors(self, tmp_path):
-        text = TEMPLATE.read_text().replace(
-            "#define ext_flush    ext_api.ext_flush\n", ""
-        )
-        with pytest.raises(
-            ValueError, match=r"struct members without a define mapping.*ext_flush"
-        ):
-            _run(tmp_path, text)
-
-    def test_define_without_member_errors(self, tmp_path):
-        text = TEMPLATE.read_text().replace(
-            "#define ext_get_kind ext_api.ext_get_kind",
-            "#define ext_get_kind ext_api.ext_get_kind\n#define ext_ghost ext_api.ext_ghost",
-        )
-        with pytest.raises(
-            ValueError, match=r"define mappings without a struct member.*ext_ghost"
-        ):
-            _run(tmp_path, text)
-
-    def test_duplicate_member_errors(self, tmp_path):
-        text = TEMPLATE.read_text().replace(
-            "	int32_t (*ext_flush)(ext_db db);",
-            "	int32_t (*ext_flush)(ext_db db);\n	int32_t (*ext_flush)(ext_db db);",
-        )
-        with pytest.raises(ValueError, match=r"declared more than once.*ext_flush"):
-            _run(tmp_path, text)
-
-    def test_trailing_content_after_semicolon_errors(self):
-        struct = (
-            "typedef struct {\n"
-            "#if V > 0 // v1.0.0\n"
-            "\tint (*a)(void); int (*b)(void);\n"
-            "#endif\n"
-            "} api_t;\n"
-        )
-        with pytest.raises(ValueError, match="content after ';'"):
-            _extract_struct(struct)
-
-    def test_missing_semicolon_errors(self):
-        struct = (
-            "typedef struct {\n"
-            "#if V > 0 // v1.0.0\n"
-            "\tint (*a)(void)\n"
-            "#endif\n"
-            "} api_t;\n"
-        )
-        with pytest.raises(ValueError, match="missing terminating ';'"):
-            _extract_struct(struct)
-
-    def test_swallowed_member_errors(self):
-        # A missing ';' that swallows the next member is caught as a malformed member.
-        struct = (
-            "typedef struct {\n"
-            "#if V > 0 // v1.0.0\n"
-            "\tint (*a)(void) int (*b)(void);\n"
-            "#endif\n"
-            "} api_t;\n"
-        )
-        with pytest.raises(ValueError, match="missing ';'"):
-            _extract_struct(struct)
-
-
-@pytest.mark.skipif(not HAS_CC, reason="no C compiler available")
 class TestCompile:
     """Both generated fixture headers are syntactically valid."""
 
     PRELUDE = (
         "#include <stdint.h>\n"
+        # duckdb.h supplies these; the fixture's stand-in must too
+        "#define EXT_API_VERSION_MAJOR 1\n"
+        "#define EXT_API_VERSION_MINOR 1\n"
+        "#define EXT_API_VERSION_PATCH 0\n"
+        "#define EXT_API_VERSION_AT_LEAST(x, y, z) "
+        "(EXT_API_VERSION_MAJOR > (x) || (EXT_API_VERSION_MAJOR == (x) && "
+        "(EXT_API_VERSION_MINOR > (y) || (EXT_API_VERSION_MINOR == (y) && "
+        "EXT_API_VERSION_PATCH >= (z)))))\n"
         "typedef void *ext_db;\n"
         "typedef enum { EXT_KIND_A = 0, EXT_KIND_B = 1 } EXT_KIND;\n"
         "typedef EXT_KIND ext_kind;\n"
