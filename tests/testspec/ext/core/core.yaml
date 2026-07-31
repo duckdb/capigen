@@ -14,6 +14,9 @@ aliases:
     description: Alias for the KIND enum
 functions:
   open:
+    offset: 0
+    lifecycle:
+      - ["stable", "v1.0.0", "2024-01-01"]
     return_type: i32
     return_pointer: 0
     return_const: false
@@ -27,6 +30,9 @@ functions:
         indirection: 1
         const: false
   close:
+    offset: 1
+    lifecycle:
+      - ["stable", "v1.0.0", "2024-01-01"]
     return_type: void
     return_pointer: 0
     return_const: false
@@ -36,11 +42,17 @@ functions:
         indirection: 0
         const: false
   version:
+    offset: 2
+    lifecycle:
+      - ["stable", "v1.0.0", "2024-01-01"]
     return_type: char
     return_pointer: 1
     return_const: true
     parameters: {}
   flush:
+    offset: 3
+    lifecycle:
+      - ["unstable", "v1.0.0", "2024-02-01"]
     return_type: i32
     return_pointer: 0
     return_const: false
@@ -50,6 +62,9 @@ functions:
         indirection: 0
         const: false
   get_kind:
+    offset: 4
+    lifecycle:
+      - ["unstable", "v1.0.0", "2024-03-01"]
     return_type: KIND
     return_pointer: 0
     return_const: false
@@ -59,6 +74,8 @@ functions:
         indirection: 0
         const: false
   skipme:
+    lifecycle:
+      - ["stable", "v1.0.0", "2024-04-01"]
     return_type: void
     return_pointer: 0
     return_const: false
@@ -68,6 +85,8 @@ functions:
         indirection: 0
         const: false
   extra_one:
+    lifecycle:
+      - ["unstable", "v1.0.0", "2025-01-01"]
     return_type: void
     return_pointer: 0
     return_const: false
@@ -77,6 +96,9 @@ functions:
         indirection: 0
         const: false
   extra_two:
+    lifecycle:
+      - ["stable", "v1.1.0", "2025-06-01"]
+      - ["unstable", "v1.0.0", "2025-02-01"]
     return_type: i32
     return_pointer: 0
     return_const: false

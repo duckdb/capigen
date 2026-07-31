@@ -71,6 +71,11 @@
       "additionalProperties": {
         "$ref": "#/$defs/StateDefinition"
       }
+    },
+    "version_macro": {
+      "description": "Base name of the target-version macros every adapter gates against (<base>_MAJOR/_MINOR/_PATCH, <base>_AT_LEAST, <base>_BELOW). Defaults to <PREFIX>API_VERSION.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
     }
   },
   "$defs": {
@@ -95,6 +100,10 @@
             "opt_out",
             "never"
           ]
+        },
+        "order": {
+          "description": "Position in the lifecycle progression, low to high. Declare on all states or none; when declared, a construct's lifecycle must move strictly forward through them.",
+          "type": "integer"
         }
       },
       "allOf": [

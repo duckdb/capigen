@@ -82,9 +82,6 @@
 {% if func.guard_directive %}
 {{ func.guard_directive }}
 {% endif %}
-{% if func.deprecated_gate %}
-#ifndef {{ c_opts.no_deprecated_guard }}
-{% endif %}
   {%- if func.description -%}
 /*!
 {{ func.description | c_lines(" * ") }}
@@ -103,9 +100,6 @@
       {%- endfor -%}
       {%- else -%}void{%- endif -%}
   );
-{% if func.deprecated_gate %}
-#endif
-{% endif %}
 {% if func.guard_directive %}
 #endif
 {% endif %}
@@ -124,3 +118,11 @@
 {% endif %}
 
 {% endfor %}
+{% if module.removed %}
+
+/* --- Removed from {{ module.name }} --- */
+{% for r in module.removed %}
+
+//! REMOVED IN {{ r.version }}. This {{ r.kind }} was called {{ r.name }} and is gone from the library.
+{% endfor %}
+{% endif %}

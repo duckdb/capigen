@@ -251,55 +251,17 @@ class TestFunctionValidation:
         errors = validate_semantics(modules, metadata)
         assert any("Unknown return type 'missing'" in e for e in errors)
 
-    def test_unknown_added_version(self, metadata, make_module):
-        modules = [
-            make_module(
-                "m",
-                functions={
-                    "duckdb_v2_func": {
-                        "return_type": "i32",
-                        "return_pointer": 0,
-                        "return_const": False,
-                        "parameters": {},
-                        "added": "v9.9.9",
-                    },
-                },
-            ),
-        ]
-        errors = validate_semantics(modules, metadata)
-        assert any("Unknown 'added' version 'v9.9.9'" in e for e in errors)
-
-    def test_unknown_deprecated_version(self, metadata, make_module):
-        modules = [
-            make_module(
-                "m",
-                functions={
-                    "duckdb_v2_func": {
-                        "return_type": "i32",
-                        "return_pointer": 0,
-                        "return_const": False,
-                        "parameters": {},
-                        "deprecated": "v9.9.9",
-                    },
-                },
-            ),
-        ]
-        errors = validate_semantics(modules, metadata)
-        assert any("Unknown 'deprecated' version 'v9.9.9'" in e for e in errors)
-
     def test_valid_versions_accepted(self, metadata, make_module):
         modules = [
             make_module(
                 "m",
                 functions={
-                    "duckdb_v2_func": {
-                        "return_type": "i32",
-                        "return_pointer": 0,
-                        "return_const": False,
-                        "parameters": {},
-                        "added": "v1.0.0",
-                        "deprecated": "v1.1.0",
-                    },
+                    "duckdb_v2_func": _func(
+                        lifecycle=[
+                            ["deprecated", "v1.1.0", "2026-06-01"],
+                            ["stable", "v1.0.0", "2026-01-01"],
+                        ]
+                    ),
                 },
             ),
         ]
@@ -316,20 +278,29 @@ def _func(**overrides):
         "return_pointer": 0,
         "return_const": False,
         "parameters": {},
+        "lifecycle": [["stable", "v1.0.0", "2026-01-01"]],
     }
     func.update(overrides)
     return func
 
 
-class TestUnstableReferences:
-    """A symbol that is not unstable must not reference an unstable type."""
+class TestLifecycleReferences:
+    """Only functions are gated, so a type is always there to be referenced.
 
-    def test_stable_function_param_rejects_unstable_handle(self, metadata, make_module):
+    What still cannot be referenced is a construct that is emitted nowhere: a
+    `never` state means the type is not part of the API at all.
+    """
+
+    GONE = [["removed", "v1.1.0", "2026-06-01"], ["stable", "v1.0.0", "2026-01-01"]]
+
+    def test_stable_function_may_reference_unstable_handle(self, metadata, make_module):
+        """The handle is emitted unconditionally, so nothing can dangle."""
         modules = [
             make_module("common", handles={"scratch": {"lifecycle": UNSTABLE}}),
             make_module(
                 "api",
                 functions={
+                    "make": _func(return_type="scratch"),
                     "use": _func(
                         parameters={
                             "s": {"type": "scratch", "indirection": 0, "const": False}
@@ -338,21 +309,7 @@ class TestUnstableReferences:
                 },
             ),
         ]
-        errors = validate_semantics(modules, metadata)
-        assert any(
-            "api::use.s" in e and "references 'scratch' (state 'unstable')" in e
-            for e in errors
-        )
-
-    def test_stable_function_return_rejects_unstable_handle(
-        self, metadata, make_module
-    ):
-        modules = [
-            make_module("common", handles={"scratch": {"lifecycle": UNSTABLE}}),
-            make_module("api", functions={"make": _func(return_type="scratch")}),
-        ]
-        errors = validate_semantics(modules, metadata)
-        assert any("references 'scratch' (state 'unstable')" in e for e in errors)
+        assert validate_semantics(modules, metadata) == []
 
     def test_unstable_function_may_reference_unstable_handle(
         self, metadata, make_module
@@ -371,38 +328,18 @@ class TestUnstableReferences:
                 },
             ),
         ]
-        errors = validate_semantics(modules, metadata)
-        assert errors == []
+        assert validate_semantics(modules, metadata) == []
 
-    def test_stable_alias_rejects_unstable_underlying(self, metadata, make_module):
-        modules = [
-            make_module("common", handles={"scratch": {"lifecycle": UNSTABLE}}),
-            make_module("api", aliases={"mine": {"underlying": "scratch"}}),
-        ]
-        errors = validate_semantics(modules, metadata)
-        assert any(
-            "api::mine" in e and "references 'scratch' (state 'unstable')" in e
-            for e in errors
-        )
-
-    def test_unstable_alias_may_reference_unstable_underlying(
+    def test_alias_struct_and_callback_may_reference_unstable_types(
         self, metadata, make_module
     ):
+        """Every referrer kind: alias underlying, struct field (flat, union-nested
+        and anonymous-nested), and a callback's return type and parameters."""
         modules = [
             make_module("common", handles={"scratch": {"lifecycle": UNSTABLE}}),
             make_module(
                 "api",
-                aliases={"mine": {"underlying": "scratch", "lifecycle": UNSTABLE}},
-            ),
-        ]
-        errors = validate_semantics(modules, metadata)
-        assert errors == []
-
-    def test_stable_struct_field_rejects_unstable_type(self, metadata, make_module):
-        modules = [
-            make_module("common", handles={"scratch": {"lifecycle": UNSTABLE}}),
-            make_module(
-                "api",
+                aliases={"mine": {"underlying": "scratch"}},
                 structs={
                     "holder": {
                         "fields": [
@@ -411,50 +348,23 @@ class TestUnstableReferences:
                                 "type": "scratch",
                                 "pointer": 0,
                                 "const": False,
-                            }
-                        ],
-                    }
-                },
-            ),
-        ]
-        errors = validate_semantics(modules, metadata)
-        assert any(
-            "api::holder.s" in e and "references 'scratch' (state 'unstable')" in e
-            for e in errors
-        )
-
-    def test_stable_struct_nested_field_rejects_unstable_type(
-        self, metadata, make_module
-    ):
-        modules = [
-            make_module("common", handles={"scratch": {"lifecycle": UNSTABLE}}),
-            make_module(
-                "api",
-                structs={
-                    "holder": {
-                        "fields": [
+                            },
                             {
                                 "name": "value",
                                 "union": [
                                     {
                                         "name": "a",
-                                        "fields": [{"name": "s", "type": "scratch"}],
+                                        "fields": [{"name": "u", "type": "scratch"}],
                                     }
                                 ],
-                            }
+                            },
+                            {
+                                "name": "inner",
+                                "fields": [{"name": "n", "type": "scratch"}],
+                            },
                         ],
                     }
                 },
-            ),
-        ]
-        errors = validate_semantics(modules, metadata)
-        assert any("references 'scratch' (state 'unstable')" in e for e in errors)
-
-    def test_stable_callback_rejects_unstable_types(self, metadata, make_module):
-        modules = [
-            make_module("common", handles={"scratch": {"lifecycle": UNSTABLE}}),
-            make_module(
-                "api",
                 callbacks={
                     "notify": {
                         "return_type": "scratch",
@@ -467,14 +377,11 @@ class TestUnstableReferences:
                 },
             ),
         ]
-        errors = validate_semantics(modules, metadata)
-        assert (
-            len([e for e in errors if "references 'scratch' (state 'unstable')" in e])
-            == 2
-        )
+        assert validate_semantics(modules, metadata) == []
 
-    def test_deprecated_function_rejects_unstable_type(self, metadata, make_module):
-        """Deprecated is compiled by default (opt-out), unstable is not (opt-in)."""
+    def test_deprecated_function_may_reference_unstable_type(
+        self, metadata, make_module
+    ):
         status = [
             ["deprecated", "v1.1.0", "2026-06-01"],
             ["stable", "v1.0.0", "2026-01-01"],
@@ -486,11 +393,45 @@ class TestUnstableReferences:
                 functions={"old": _func(lifecycle=status, return_type="scratch")},
             ),
         ]
+        assert validate_semantics(modules, metadata) == []
+
+    def test_removed_type_is_still_rejected(self, metadata, make_module):
+        """A `never` type is emitted nowhere, so a live referrer would not compile."""
+        modules = [
+            make_module("common", handles={"scratch": {"lifecycle": self.GONE}}),
+            make_module("api", functions={"use": _func(return_type="scratch")}),
+        ]
         errors = validate_semantics(modules, metadata)
-        assert any("references 'scratch' (state 'unstable')" in e for e in errors)
+        assert any(
+            "references 'scratch' (state 'removed'), which is never emitted" in e
+            for e in errors
+        )
+
+    def test_removed_type_in_a_struct_field_is_still_rejected(
+        self, metadata, make_module
+    ):
+        modules = [
+            make_module("common", handles={"scratch": {"lifecycle": self.GONE}}),
+            make_module(
+                "api",
+                structs={
+                    "holder": {
+                        "fields": [
+                            {
+                                "name": "s",
+                                "type": "scratch",
+                                "pointer": 0,
+                                "const": False,
+                            }
+                        ]
+                    }
+                },
+            ),
+        ]
+        errors = validate_semantics(modules, metadata)
+        assert any("api::holder.s" in e and "never emitted" in e for e in errors)
 
     def test_stabilized_type_is_referenceable(self, metadata, make_module):
-        """A type whose current status is stable no longer gates its referrers."""
         status = [
             ["stable", "v1.1.0", "2026-06-01"],
             ["unstable", "v1.0.0", "2026-01-01"],
@@ -499,36 +440,36 @@ class TestUnstableReferences:
             make_module("common", handles={"scratch": {"lifecycle": status}}),
             make_module("api", functions={"use": _func(return_type="scratch")}),
         ]
-        errors = validate_semantics(modules, metadata)
-        assert errors == []
+        assert validate_semantics(modules, metadata) == []
 
-    def test_stable_struct_anonymous_nested_field_rejects_unstable_type(
-        self, metadata, make_module
-    ):
-        """The anonymous-struct branch (`fields`, not `union`) recurses too."""
+    def test_function_may_not_predate_a_type_it_names(self, metadata, make_module):
+        """A signature cannot involve a type that did not exist yet: the stamp is
+        wrong, and a consumer targeting a version in between would get a
+        declaration the library of that version never exported."""
         modules = [
-            make_module("common", handles={"scratch": {"lifecycle": UNSTABLE}}),
+            make_module(
+                "common",
+                handles={"later": {"lifecycle": [["stable", "v1.1.0", "2026-06-01"]]}},
+            ),
             make_module(
                 "api",
-                structs={
-                    "holder": {
-                        "fields": [
-                            {
-                                "name": "inner",
-                                "fields": [{"name": "s", "type": "scratch"}],
-                            }
-                        ],
-                    }
+                functions={
+                    "early": _func(
+                        lifecycle=[["stable", "v1.0.0", "2026-01-01"]],
+                        return_type="later",
+                    )
                 },
             ),
         ]
         errors = validate_semantics(modules, metadata)
-        assert any("references 'scratch' (state 'unstable')" in e for e in errors)
+        assert any(
+            "introduced in v1.0.0 but references 'later', introduced later in v1.1.0"
+            in e
+            for e in errors
+        )
 
-    def test_stable_handle_rejects_unstable_cleanup_function(
-        self, metadata, make_module
-    ):
-        """A visible handle must not point at a guarded-out destroy function."""
+    def test_handle_may_use_a_gated_cleanup_function(self, metadata, make_module):
+        """The handle is always emitted; its destructor gates like any function."""
         modules = [
             make_module(
                 "common",
@@ -536,36 +477,32 @@ class TestUnstableReferences:
                 functions={"destroy_conn": _func(lifecycle=UNSTABLE)},
             ),
         ]
-        errors = validate_semantics(modules, metadata)
-        assert any(
-            "common::conn" in e
-            and "cleanup_with references 'destroy_conn' (state 'unstable')" in e
-            for e in errors
-        )
+        assert validate_semantics(modules, metadata) == []
 
-    def test_unstable_handle_may_use_unstable_cleanup_function(
-        self, metadata, make_module
-    ):
+    def test_removed_cleanup_function_rejected(self, metadata, make_module):
+        """A handle whose cleanup is gone leaves no way to free it."""
         modules = [
             make_module(
                 "common",
-                handles={
-                    "conn": {"cleanup_with": "destroy_conn", "lifecycle": UNSTABLE}
-                },
-                functions={"destroy_conn": _func(lifecycle=UNSTABLE)},
+                handles={"conn": {"cleanup_with": "destroy_conn"}},
+                functions={"destroy_conn": _func(lifecycle=self.GONE)},
             ),
         ]
         errors = validate_semantics(modules, metadata)
-        assert errors == []
+        assert any(
+            "common::conn" in e
+            and "cleanup_with references 'destroy_conn' (state 'removed')" in e
+            for e in errors
+        )
 
-    def test_prefixed_cleanup_with_resolves_and_fires(self, metadata, make_module):
-        """The real specs write prefixed names; the check must still fire."""
+    def test_prefixed_cleanup_with_resolves(self, metadata, make_module):
+        """The real specs write prefixed names; resolution must still find them."""
         metadata["prefix"] = "duckdb_"
         modules = [
             make_module(
                 "common",
                 handles={"conn": {"cleanup_with": "duckdb_destroy_conn"}},
-                functions={"destroy_conn": _func(lifecycle=UNSTABLE)},
+                functions={"destroy_conn": _func(lifecycle=self.GONE)},
             ),
         ]
         errors = validate_semantics(modules, metadata)
@@ -590,8 +527,7 @@ class TestUnstableReferences:
                 functions={"destroy_conn": _func()},
             ),
         ]
-        errors = validate_semantics(modules, metadata)
-        assert errors == []
+        assert validate_semantics(modules, metadata) == []
 
 
 REMOVED = [["removed", "v1.1.0", "2026-06-01"], ["unstable", "v1.0.0", "2026-01-01"]]
@@ -659,7 +595,7 @@ class TestStateDeclarations:
         ]
         assert validate_semantics(modules, metadata) == []
 
-    def test_opt_in_types_under_different_guards_rejected(self, metadata, make_module):
+    def test_opt_in_types_under_different_guards_accepted(self, metadata, make_module):
         metadata["lifecycle_states"] = {
             "exp_a": {"visibility": "opt_in", "guard": "GUARD_A"},
             "exp_b": {"visibility": "opt_in", "guard": "GUARD_B"},
@@ -673,8 +609,9 @@ class TestStateDeclarations:
                 functions={"use": _func(lifecycle=a, return_type="h")},
             ),
         ]
-        errors = validate_semantics(modules, metadata)
-        assert any("references 'h' (state 'exp_b')" in e for e in errors)
+        # The handle is emitted unconditionally whatever its state, so a referrer
+        # under a different opt-in guard cannot dangle.
+        assert validate_semantics(modules, metadata) == []
 
     def test_same_guard_same_state_accepted(self, metadata, make_module):
         modules = [
@@ -698,27 +635,15 @@ class TestStateDeclarations:
         ]
         assert validate_semantics(modules, metadata) == []
 
-    def test_stable_referencing_deprecated_type_rejected(self, metadata, make_module):
-        """Opting out of deprecated would break a still-present referrer."""
-        dep = [["deprecated", "v1.1.0", "2026-06-01"]]
+    def test_stable_referencing_deprecated_type_accepted(self, metadata, make_module):
+        """A deprecated type is still emitted, so opting out cannot break a referrer."""
+        dep = [
+            ["deprecated", "v1.1.0", "2026-06-01"],
+            ["stable", "v1.0.0", "2026-01-01"],
+        ]
         modules = [
             make_module("common", handles={"h": {"lifecycle": dep}}),
             make_module("api", functions={"use": _func(return_type="h")}),
-        ]
-        errors = validate_semantics(modules, metadata)
-        assert any("references 'h' (state 'deprecated')" in e for e in errors)
-
-    def test_legacy_deprecated_function_may_use_deprecated_type(
-        self, metadata, make_module
-    ):
-        """The legacy field gates with the same opt-out guard as the state."""
-        dep = [["deprecated", "v1.1.0", "2026-06-01"]]
-        modules = [
-            make_module("common", handles={"h": {"lifecycle": dep}}),
-            make_module(
-                "api",
-                functions={"old": _func(deprecated="v1.1.0", return_type="h")},
-            ),
         ]
         assert validate_semantics(modules, metadata) == []
 
@@ -732,6 +657,7 @@ class TestAnchorValidation:
             "return_pointer": 0,
             "return_const": False,
             "parameters": {},
+            "lifecycle": [["stable", "v1.0.0", "2026-01-01"]],
         }
         if description is not None:
             f["description"] = description

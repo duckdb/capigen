@@ -15,7 +15,7 @@ class TestLoad:
         assert spec.modules
         assert spec.metadata["prefix"] == "duckdb_v2_"
         assert spec.prefix == "duckdb_v2_"
-        assert spec.schema_version == "0.5"
+        assert spec.schema_version == "0.6"
 
     def test_derived_views(self):
         spec = capigen.load(TESTSPEC_DIR)
@@ -24,11 +24,13 @@ class TestLoad:
         assert spec.registry["ctx"] == "duckdb_v2_ctx_ptr"
 
     def test_semantic_errors_raise_spec_error(self, tmp_path):
+        # A removed type is emitted nowhere, so a live function naming it is invalid.
         (tmp_path / "metadata.yaml").write_text(
-            'schema_version: "0.5"\n'
+            'schema_version: "0.6"\n'
             'versions: ["v1.0.0"]\n'
             "lifecycle_states:\n"
-            "  unstable: {visibility: opt_in, guard: G}\n"
+            "  removed: {visibility: never}\n"
+            "  stable: {visibility: always}\n"
             "suffixes: {handles: _h, callbacks: _cb, aliases: _t}\n"
             "primitives: [{name: i32, c_type: int32_t}]\n"
         )
@@ -36,9 +38,10 @@ class TestLoad:
             "module: m\n"
             "handles:\n"
             "  gadget:\n"
-            '    lifecycle: [["unstable", "v1.0.0", "2026-01-01"]]\n'
+            '    lifecycle: [["removed", "v1.0.0", "2026-01-01"]]\n'
             "functions:\n"
             "  use:\n"
+            '    lifecycle: [["stable", "v1.0.0", "2026-01-01"]]\n'
             "    return_type: gadget\n"
         )
         with pytest.raises(capigen.SpecError, match="references 'gadget'") as exc:
@@ -56,7 +59,7 @@ class TestLoad:
         import jsonschema
 
         (tmp_path / "metadata.yaml").write_text(
-            'schema_version: "0.5"\n'
+            'schema_version: "0.6"\n'
             "versions: []\n"
             "suffixes: {handles: _h, callbacks: _cb, aliases: _t}\n"
             "primitives: [{name: i32, c_type: int32_t}]\n"

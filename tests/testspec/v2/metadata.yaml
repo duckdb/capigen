@@ -1,5 +1,6 @@
-schema_version: "0.5"
+schema_version: "0.6"
 versions:
+  - "v0.9.0"
   - "v1.0.0"
 prefix: "duckdb_v2_"
 lifecycle_states:

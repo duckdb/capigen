@@ -30,6 +30,21 @@
       "items": {
         "type": "string"
       }
+    },
+    "api_variable": {
+      "description": "Name of the vtable variable the mapping macros indirect through. Defaults to <prefix>ext_api.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "struct_typename": {
+      "description": "Name of the function-pointer struct, as the template declares it. Used by the engine-side header.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "version_floor": {
+      "description": "Version whose engine first shipped this struct. Slots cannot predate it, so bands are clamped to it. Defaults to the oldest declared version.",
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
     }
   }
 }

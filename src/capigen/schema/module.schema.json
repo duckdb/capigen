@@ -120,6 +120,27 @@
             "$ref": "#/$defs/LifecycleEntry"
           },
           "default": []
+        },
+        "renamed_from": {
+          "description": "Former name of this construct, and the version it was renamed in. A compatibility alias is emitted for targets below that version.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "description": "The bare spec name this construct used to have.",
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "version": {
+              "description": "Version the rename landed in (vX.Y.Z, from metadata versions).",
+              "type": "string",
+              "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+            }
+          }
         }
       }
     },
@@ -165,6 +186,27 @@
             "$ref": "#/$defs/LifecycleEntry"
           },
           "default": []
+        },
+        "renamed_from": {
+          "description": "Former name of this construct, and the version it was renamed in. A compatibility alias is emitted for targets below that version.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "description": "The bare spec name this construct used to have.",
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "version": {
+              "description": "Version the rename landed in (vX.Y.Z, from metadata versions).",
+              "type": "string",
+              "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+            }
+          }
         }
       }
     },
@@ -200,6 +242,27 @@
             "$ref": "#/$defs/LifecycleEntry"
           },
           "default": []
+        },
+        "renamed_from": {
+          "description": "Former name of this construct, and the version it was renamed in. A compatibility alias is emitted for targets below that version.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "description": "The bare spec name this construct used to have.",
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "version": {
+              "description": "Version the rename landed in (vX.Y.Z, from metadata versions).",
+              "type": "string",
+              "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+            }
+          }
         }
       }
     },
@@ -255,22 +318,6 @@
           "type": "boolean",
           "default": false
         },
-        "added": {
-          "description": "API version when this function was introduced.",
-          "type": "string",
-          "pattern": "^v\\d+\\.\\d+\\.\\d+$",
-          "examples": [
-            "v1.2.0"
-          ]
-        },
-        "deprecated": {
-          "description": "API version when this function was deprecated.",
-          "type": "string",
-          "pattern": "^v\\d+\\.\\d+\\.\\d+$",
-          "examples": [
-            "v1.5.0"
-          ]
-        },
         "return_description": {
           "description": "Description of the return value.",
           "type": "string",
@@ -288,6 +335,32 @@
             "$ref": "#/$defs/LifecycleEntry"
           },
           "default": []
+        },
+        "offset": {
+          "description": "Frozen offset in the extension function-pointer struct. Read only by the extension_header adapter, to reproduce an ABI order that predates the ordering rule. Functions without one are ordered after all pinned members by (introduction date, name).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "renamed_from": {
+          "description": "Former name of this construct, and the version it was renamed in. A compatibility alias is emitted for targets below that version.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "description": "The bare spec name this construct used to have.",
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "version": {
+              "description": "Version the rename landed in (vX.Y.Z, from metadata versions).",
+              "type": "string",
+              "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+            }
+          }
         }
       }
     },
@@ -366,6 +439,27 @@
             "$ref": "#/$defs/LifecycleEntry"
           },
           "default": []
+        },
+        "renamed_from": {
+          "description": "Former name of this construct, and the version it was renamed in. A compatibility alias is emitted for targets below that version.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "description": "The bare spec name this construct used to have.",
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "version": {
+              "description": "Version the rename landed in (vX.Y.Z, from metadata versions).",
+              "type": "string",
+              "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+            }
+          }
         }
       }
     },
@@ -546,6 +640,27 @@
             "$ref": "#/$defs/LifecycleEntry"
           },
           "default": []
+        },
+        "renamed_from": {
+          "description": "Former name of this construct, and the version it was renamed in. A compatibility alias is emitted for targets below that version.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "description": "The bare spec name this construct used to have.",
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "version": {
+              "description": "Version the rename landed in (vX.Y.Z, from metadata versions).",
+              "type": "string",
+              "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+            }
+          }
         }
       }
     },

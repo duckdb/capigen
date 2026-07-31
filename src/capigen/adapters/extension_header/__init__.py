@@ -1,24 +1,29 @@
-"""Extension header adapter: verify a frozen template struct against the spec and append.
+"""Extension header adapter: generate the function-pointer struct from the spec.
 
-One invocation produces two lockstep outputs: the consumer header (the frozen
-template with the append markers filled) and the derived engine-side header (the
-ungated struct plus a create method assigning every member). The two must be
+One invocation produces two lockstep outputs: the consumer header (a template
+skeleton with the struct and mapping regions filled) and the engine-side header
+(the ungated struct plus a create method assigning every member). The two must be
 generated together; a divergence between them is silent memory corruption.
 
-The template is the source of ABI order. Each function-pointer member is verified
-against the spec: the name must resolve to a declared function and the parameter
-and return types must match. Spec functions absent from the template are appended
-into both marker regions in deterministic loader order.
+The spec is the source of ABI order: `offset` pins a member laid down before
+there was a rule, and everything else follows by introduction date then name.
+
+The struct itself carries no conditionals. Only functions are gated, and a
+member's signature therefore only ever names types that are always emitted, so
+every member is always declarable. The gate goes on the indirection macro
+instead: a name resolves for an extension exactly when it resolves for any other
+consumer, while the layout is invariant by construction rather than by matching
+placeholder sizes. A removed function keeps its slot too, so the offsets after it
+do not shift; it simply loses its macro, and the engine leaves the slot null.
 """
 
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from ...states import resolve_states
-from ...tools import build_registry, chase, version_key
+from ...states import resolve_states, version_macro_base
+from ...tools import version_key
 from ..c.render import CFunction
 from ..c.resolve import resolve_modules
 
@@ -29,269 +34,14 @@ _BEGIN = "// capigen:begin appended"
 _END = "// capigen:end appended"
 
 
-@dataclass
-class _Member:
-    name: str
-    signature: str  # full member text without the trailing semicolon
-
-
-@dataclass
-class _Region:
-    kind: str  # "stable" or "unstable"
-    version: str = ""  # stable regions: e.g. "1.2.0"
-    description: str = ""  # unstable regions: the group comment
-    guard: str = ""  # unstable regions: the #ifdef guard token
-    members: list[_Member] = field(default_factory=list)
-
-
 # ---------------------------------------------------------------------------
-# Template extraction
+# Rendering
 # ---------------------------------------------------------------------------
 
 
-def _member_name(sig: str) -> str:
-    """Return the member name, validating the text is exactly one function-pointer decl.
-
-    Assumes members return by value or by pointer, never a function pointer, which
-    holds for this API surface. A trailing token past the parameter list means a
-    swallowed member (a missing ';'), not a valid declaration.
-    """
-    name = re.search(r"\(\s*\*\s*([A-Za-z_]\w*)\s*\)", sig)
-    if not name:
-        raise ValueError(f"cannot parse a member name from: {sig!r}")
-    rest = sig[name.end() :].lstrip()
-    if not rest.startswith("("):
-        raise ValueError(f"malformed struct member (no parameter list): {sig!r}")
-    depth = 0
-    end = None
-    for idx, ch in enumerate(rest):
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                end = idx
-                break
-    if end is None or rest[end + 1 :].strip():
-        raise ValueError(f"malformed struct member (missing ';'?): {sig!r}")
-    return name.group(1)
-
-
-def _extract_struct(text: str) -> tuple[str, list[_Region]]:
-    """Extract the struct typename and its ordered, gated members from the template."""
-    marker = "typedef struct {"
-    if marker not in text:
-        raise ValueError("template has no 'typedef struct {' function-pointer struct")
-    after = text.index(marker) + len(marker)
-    close = re.search(r"\n\}\s*([A-Za-z_]\w*)\s*;", text[after:])
-    if not close:
-        raise ValueError("template struct is not closed by '} <name>;'")
-    typename = close.group(1)
-    lines = text[after : after + close.start()].split("\n")
-
-    regions: list[_Region] = []
-    current: _Region | None = None
-    pending_comment: str | None = None
-    i = 0
-    while i < len(lines):
-        s = lines[i].strip()
-        if not s:
-            i += 1
-            continue
-        if s.startswith("#if") and not s.startswith(("#ifdef", "#ifndef")):
-            block = s
-            while block.rstrip().endswith("\\"):
-                i += 1
-                block += "\n" + lines[i].strip()
-            match = re.search(r"//\s*v(\d+\.\d+\.\d+)", block)
-            if not match:
-                raise ValueError(
-                    f"stable gate without a '// vX.Y.Z' comment: {block!r}"
-                )
-            current = _Region(kind="stable", version=match.group(1))
-            regions.append(current)
-            pending_comment = None
-            i += 1
-            continue
-        if s.startswith("#ifdef"):
-            current = _Region(
-                kind="unstable",
-                description=pending_comment or "",
-                guard=s[len("#ifdef") :].strip(),
-            )
-            regions.append(current)
-            pending_comment = None
-            i += 1
-            continue
-        if s.startswith("#endif"):
-            current = None
-            i += 1
-            continue
-        if s.startswith("//"):
-            pending_comment = s[2:].strip()
-            i += 1
-            continue
-        if s.startswith("#"):
-            i += 1
-            continue
-        acc = s
-        while ";" not in acc:
-            i += 1
-            nxt = lines[i].strip() if i < len(lines) else ""
-            if not nxt or nxt.startswith(("#", "//")):
-                raise ValueError(f"struct member missing terminating ';': {acc!r}")
-            acc += " " + nxt
-        semi = acc.index(";")
-        trailing = acc[semi + 1 :].strip()
-        if trailing:
-            raise ValueError(
-                f"unexpected content after ';' in struct member: {trailing!r}"
-            )
-        if current is None:
-            raise ValueError(f"struct member outside a gated region: {acc[:semi]!r}")
-        sig = acc[:semi].strip()
-        current.members.append(_Member(name=_member_name(sig), signature=sig))
-        pending_comment = None
-        i += 1
-
-    return typename, regions
-
-
-def _extract_defines(text: str) -> tuple[str, list[str]]:
-    """Extract the api variable name and the mapping names, joining wrapped defines."""
-    api_vars: set[str] = set()
-    names: list[str] = []
-    lines = text.split("\n")
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        while line.rstrip().endswith("\\"):
-            i += 1
-            line = line.rstrip()[:-1] + " " + lines[i].strip()
-        match = re.match(r"[ \t]*#define\s+(\w+)\s+(\w+)\.(\w+)\s*$", line)
-        if match:
-            lhs, api_var, rhs = match.group(1), match.group(2), match.group(3)
-            if lhs != rhs:
-                raise ValueError(
-                    f"define '{lhs}' does not map to '{lhs}' (found '{rhs}')"
-                )
-            api_vars.add(api_var)
-            names.append(lhs)
-        i += 1
-    if not names:
-        raise ValueError("template has no '#define <fn> <api>.<fn>' mapping entries")
-    if len(api_vars) != 1:
-        raise ValueError(
-            f"define mappings use inconsistent api variables: {sorted(api_vars)}"
-        )
-    return api_vars.pop(), names
-
-
-# ---------------------------------------------------------------------------
-# Signature comparison
-# ---------------------------------------------------------------------------
-
-
-def _build_canonicalizer(modules: list[dict], metadata: dict):
-    """Return a function mapping a C type token to its ultimate underlying spelling.
-
-    Only spellings the spec itself declares equivalent (an alias and its
-    underlying) collapse together, so genuinely distinct types never match.
-    """
-    prefix = metadata.get("prefix", "")
-    suffixes = metadata["suffixes"]
-    primitives = {p["name"]: p["c_type"] for p in metadata["primitives"]}
-    registry = build_registry(modules, suffixes, prefix)
-
-    alias_underlying: dict[str, str] = {}
-    for mod in modules:
-        for name, alias in mod.get("aliases", {}).items():
-            c_name = name if alias.get("qualified") else registry.get(name, name)
-            underlying = alias["underlying"]
-            alias_underlying[c_name] = registry.get(underlying) or primitives.get(
-                underlying, underlying
-            )
-
-    def canonicalize(token: str) -> str:
-        return chase(alias_underlying, token)
-
-    return canonicalize
-
-
-def _normalize(text: str, canonicalize) -> str:
-    """Collapse whitespace, tighten spacing around punctuation, canonicalize type tokens."""
-    text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"\s*([*(),])\s*", r"\1", text)
-    return re.sub(r"[A-Za-z_]\w*", lambda m: canonicalize(m.group(0)), text)
-
-
-def _split_params(param_list: str) -> list[str]:
-    """Split a parameter list on top-level commas, respecting nested parentheses."""
-    parts: list[str] = []
-    depth = 0
-    current = ""
-    for ch in param_list:
-        if ch == "(":
-            depth += 1
-            current += ch
-        elif ch == ")":
-            depth -= 1
-            current += ch
-        elif ch == "," and depth == 0:
-            parts.append(current)
-            current = ""
-        else:
-            current += ch
-    if current.strip():
-        parts.append(current)
-    return [p.strip() for p in parts]
-
-
-def _param_type(param: str) -> str:
-    """Strip the parameter name, leaving its type (handles function-pointer params).
-
-    Assumes every parameter is named, which holds for this API surface; an unnamed
-    multi-token by-value type would lose its last token. The spec side never runs
-    this (it renders types directly), so any mismatch here is a false positive only.
-    """
-    param = param.strip()
-    ptr = re.search(r"\(\s*\*\s*([A-Za-z_]\w*)\s*\)", param)
-    if ptr:
-        return param[: ptr.start()] + "(*)" + param[ptr.end() :]
-    named = re.match(r"(.*?)([A-Za-z_]\w*)\s*$", param)
-    if named and named.group(1).strip():
-        return named.group(1).strip()
-    return param
-
-
-def _member_types(signature: str) -> tuple[str, list[str]]:
-    """Parse a member signature into (return type, ordered parameter types)."""
-    name = re.search(r"\(\s*\*\s*[A-Za-z_]\w*\s*\)", signature)
-    if not name:
-        raise ValueError(f"cannot parse a member name from: {signature!r}")
-    return_type = signature[: name.start()].strip()
-    rest = signature[name.end() :].lstrip()
-    depth = 0
-    param_list = ""
-    for idx, ch in enumerate(rest):
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                param_list = rest[1:idx]
-                break
-    params = _split_params(param_list)
-    if params == ["void"] or not params:
-        return return_type, ["void"] if params == ["void"] else []
-    return return_type, [_param_type(p) for p in params]
-
-
-def _spec_types(func: CFunction) -> tuple[str, list[str]]:
-    """The return type and ordered parameter types the spec declares for a function."""
-    if not func.parameters:
-        return func.return_c, ["void"]
-    return func.return_c, [p.c_decl for p in func.parameters.values()]
+def _version_args(version: str) -> str:
+    """A vX.Y.Z string as the argument list of a version-comparison macro."""
+    return ", ".join(str(n) for n in version_key(version))
 
 
 def _render_decl(name: str, func: CFunction) -> str:
@@ -308,6 +58,62 @@ def _render_decl(name: str, func: CFunction) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _stabilized(spec: dict) -> str | None:
+    """The version a function was first publicly promised, or None if still unstable.
+
+    A slot is frozen by stabilization, not by introduction: while a function is
+    unstable it is only reachable from an exact-version-locked build, so its slot
+    can still move. The oldest non-unstable entry is therefore the band.
+    """
+    lifecycle = spec.get("lifecycle") or []
+    if not lifecycle:
+        # validate_semantics rejects this; reaching it means generation was run
+        # on an unvalidated spec, and guessing a band would misplace a slot.
+        raise ValueError("function has no lifecycle, so its ABI slot is undefined")
+    promised = [e for e in reversed(lifecycle) if e[0] != "unstable"]
+    return promised[0][1] if promised else None
+
+
+def _band(spec: dict, floor: str) -> str | None:
+    """The version whose engine first shipped this slot, or None for the unstable tail.
+
+    Clamped to `floor`: the struct did not exist before then, so no slot can.
+    """
+    stable = _stabilized(spec)
+    if stable is None:
+        return None  # still unstable: it belongs in the tail
+    if version_key(stable) <= version_key(floor):
+        return floor
+    return stable
+
+
+def _members_from_spec(
+    modules: list[dict],
+    func_by_name: dict,
+    prefix: str,
+    exclude: set,
+    floor: str,
+) -> list[tuple[str, str, str, str | None]]:
+    """The struct's members in ABI order, as (name, declaration, macro gate, band).
+
+    Order is (band, offset, date, name), so members group into contiguous bands and
+    the not-yet-stable ones land last. `offset` reproduces the order laid down
+    before there was a rule; within a band it is the only thing that matters.
+    """
+    entries = []
+    for mod in modules:
+        for bare, spec in (mod.get("functions") or {}).items():
+            name = prefix + bare
+            func = func_by_name.get(name)
+            if func is None or func.static_inline:
+                continue
+            if bare in exclude or name in exclude:
+                continue
+            entries.append((name, func, _band(spec, floor)))
+    entries.sort(key=_vtable_order(modules, prefix, floor))
+    return [(n, _render_decl(n, f), f.guard_directive, b) for n, f, b in entries]
+
+
 def _fill_markers(text: str, struct_block: str, define_block: str) -> str:
     """Replace the content between the two append marker pairs (struct first, defines second)."""
     pattern = re.compile(
@@ -322,6 +128,35 @@ def _fill_markers(text: str, struct_block: str, define_block: str) -> str:
     if count != 2:
         raise ValueError(f"expected exactly 2 append marker pairs, found {count}")
     return filled
+
+
+def _vtable_order(modules: list[dict], prefix: str, floor: str):
+    """Sort key for the function-pointer struct.
+
+    Band first, so a band is a contiguous run the header can gate with one `#if`
+    and truncating at a target version yields exactly the prefix that version's
+    engine shipped. Not-yet-stable members sort last, into the tail. Within a
+    band, an explicit `offset` reproduces the order laid down before there was a
+    rule; everything else follows oldest first, ties broken by name.
+    """
+    index: dict[str, tuple] = {}
+    for mod in modules:
+        for name, func in (mod.get("functions") or {}).items():
+            lifecycle = [e for e in (func.get("lifecycle") or []) if len(e) > 2]
+            introduced = lifecycle[-1][2] if lifecycle else ""
+            index[name] = (func.get("offset"), introduced, _band(func, floor))
+
+    def key(entry: tuple) -> tuple:
+        name = entry[0]
+        bare = name[len(prefix) :] if name.startswith(prefix) else name
+        pos, introduced, band = index.get(bare, (None, "", floor))
+        # the tail sorts after every band
+        rank = (1, ()) if band is None else (0, version_key(band))
+        if pos is not None:
+            return (rank, 0, pos, "")
+        return (rank, 1, introduced, name)
+
+    return key
 
 
 def generate(
@@ -343,118 +178,78 @@ def generate(
     if not opts:
         raise ValueError(
             "extension_header requires an options file (create_method, "
-            "version_macro_prefix, internal_include)"
+            "struct_typename, version_macro_prefix, internal_include)"
         )
-    # Appended members are unstable by position, gated by the unstable state's guard.
-    unstable = resolve_states(metadata).get("unstable")
-    if unstable is None or unstable.visibility != "opt_in" or not unstable.guard:
-        raise ValueError(
-            "extension_header requires an 'unstable' state with visibility "
-            "opt_in and a guard, declared under 'lifecycle_states' in metadata"
-        )
-    unstable_guard = unstable.guard
     create_method = opts["create_method"]
     version_macro_prefix = opts["version_macro_prefix"]
     internal_include = opts["internal_include"]
     exclude = set(opts.get("exclude_functions", []))
     prefix = metadata.get("prefix", "")
+    # The version whose engine first shipped this struct. Nothing can predate it.
+    floor = opts.get("version_floor") or min(metadata["versions"], key=version_key)
+    vmacro = version_macro_base(metadata)
+    allow_unstable = next(
+        (
+            st.allow_macro
+            for st in resolve_states(metadata).values()
+            if st.name == "unstable" and st.allow_macro
+        ),
+        "",
+    )
 
     template_text = Path(template).read_text()
-    typename, regions = _extract_struct(template_text)
-    api_var, define_names = _extract_defines(template_text)
-
-    # The struct's version is its newest frozen region tag. The template is
-    # the source of ABI truth, so the version is derived, never configured.
-    stable_versions = [r.version for r in regions if r.kind == "stable"]
-    if not stable_versions:
-        raise ValueError(
-            "template has no stable '// vX.Y.Z' region to derive the "
-            "struct version from"
-        )
-    api_version = max(stable_versions, key=version_key)
-
-    member_list = [m.name for r in regions for m in r.members]
-    duplicates = sorted({n for n in member_list if member_list.count(n) > 1})
-    if duplicates:
-        raise ValueError(f"struct member(s) declared more than once: {duplicates}")
-
-    # Struct members and define mappings must be a name-for-name bijection.
-    struct_names = set(member_list)
-    define_set = set(define_names)
-    members_without_define = sorted(struct_names - define_set)
-    defines_without_member = sorted(define_set - struct_names)
-    if members_without_define:
-        raise ValueError(
-            f"struct members without a define mapping: {members_without_define}"
-        )
-    if defines_without_member:
-        raise ValueError(
-            f"define mappings without a struct member: {defines_without_member}"
-        )
+    typename = opts["struct_typename"]
+    api_var = opts.get("api_variable", f"{prefix}ext_api")
+    # The struct describes the API as of the spec's newest version.
+    api_version = max(metadata["versions"], key=version_key).lstrip("v")
 
     render_modules = resolve_modules(modules, metadata)
     func_by_name: dict[str, CFunction] = {}
     for mod in render_modules:
         func_by_name.update(mod.functions)
 
-    # Verify each template member against the spec.
-    canonicalize = _build_canonicalizer(modules, metadata)
-    for region in regions:
-        for member in region.members:
-            func = func_by_name.get(member.name)
-            if func is None:
-                raise ValueError(
-                    f"template member '{member.name}' is not a declared spec function"
-                )
-            if func.static_inline:
-                raise ValueError(
-                    f"template member '{member.name}' resolves to a static_inline "
-                    "function, which has no vtable symbol"
-                )
-            t_ret, t_params = _member_types(member.signature)
-            s_ret, s_params = _spec_types(func)
-            t_norm = (
-                _normalize(t_ret, canonicalize),
-                [_normalize(p, canonicalize) for p in t_params],
-            )
-            s_norm = (
-                _normalize(s_ret, canonicalize),
-                [_normalize(p, canonicalize) for p in s_params],
-            )
-            if t_norm != s_norm:
-                spec_sig = _render_decl(member.name, func)
-                raise ValueError(
-                    f"signature mismatch for '{member.name}':\n"
-                    f"  template: {member.signature}\n"
-                    f"  spec:     {spec_sig}"
-                )
+    members = _members_from_spec(modules, func_by_name, prefix, exclude, floor)
+    names = [n for n, _, _, _ in members]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:
+        raise ValueError(f"struct member(s) declared more than once: {duplicates}")
 
-    # Append spec functions absent from the template, in deterministic loader
-    # order. Omitted functions are never appended; ones already in the template
-    # keep their frozen slot, so the ABI order never changes.
-    appended: list[tuple[str, CFunction]] = []
-    for mod in render_modules:
-        for name, func in mod.functions.items():
-            if name in struct_names or func.static_inline or func.omitted:
-                continue
-            bare = name[len(prefix) :] if name.startswith(prefix) else name
-            if bare in exclude or name in exclude:
-                continue
-            appended.append((name, func))
-
-    # Consumer header: fill the append markers (struct region is guarded).
-    if appended:
-        struct_lines = [f"#ifdef {unstable_guard}"]
-        struct_lines += [f"\t{_render_decl(n, f)};" for n, f in appended]
+    # The struct is banded: one gate per band, wrapping a contiguous run, so
+    # truncating at a target version yields exactly that version's prefix. The
+    # not-yet-stable tail is gated on the switch instead, because it only exists
+    # for a build locked to this exact engine.
+    struct_lines: list[str] = []
+    define_lines: list[str] = []
+    current_band: str | None = floor
+    open_gate = False
+    for name, decl, gate, band in members:
+        if band != current_band:
+            if open_gate:
+                struct_lines.append("#endif")
+            if band is None:
+                if not allow_unstable:
+                    raise ValueError(
+                        "spec has not-yet-stable functions but declares no "
+                        "opt-in 'unstable' lifecycle state to gate them with"
+                    )
+                struct_lines.append(f"#if {allow_unstable}")
+            else:
+                struct_lines.append(f"#if {vmacro}_AT_LEAST({_version_args(band)})")
+            open_gate = True
+            current_band = band
+        struct_lines.append(f"\t{decl};")
+        omitted = (f := func_by_name.get(name)) is not None and f.omitted
+        if omitted:
+            # Removed: the slot survives, the name must not resolve.
+            continue
+        mapping = f"#define {name} {api_var}.{name}"
+        define_lines += [gate, mapping, "#endif"] if gate else [mapping]
+    if open_gate:
         struct_lines.append("#endif")
-        struct_block = "\n".join(struct_lines) + "\n"
-        define_block = (
-            "\n".join(f"#define {n} {api_var}.{n}" for n, _ in appended) + "\n"
-        )
-    else:
-        struct_block = ""
-        define_block = ""
-    consumer = _fill_markers(template_text, struct_block, define_block)
+
+    consumer = _fill_markers(
+        template_text, "\n".join(struct_lines) + "\n", "\n".join(define_lines) + "\n"
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(consumer)
 
@@ -467,22 +262,9 @@ def generate(
         lstrip_blocks=True,
         undefined=StrictUndefined,
     )
-    internal_regions = [
-        {
-            "comment": f"// v{r.version}"
-            if r.kind == "stable"
-            else f"// {r.description}",
-            "gap": r.kind != "stable",
-            "members": [m.signature for m in r.members],
-        }
-        for r in regions
-    ]
-    # A removed function keeps its frozen slot, but its symbol is gone from the
-    # surface; assign nullptr so the engine header compiles and the layout holds.
-    slot_names = [m.name for r in regions for m in r.members] + [n for n, _ in appended]
+    # A removed function keeps its slot; the engine has no symbol for it.
     assignments = [
-        (n, "nullptr" if (f := func_by_name.get(n)) and f.omitted else n)
-        for n in slot_names
+        (n, "nullptr" if (f := func_by_name.get(n)) and f.omitted else n) for n in names
     ]
     internal = env.get_template("internal.hpp.j2").render(
         include=internal_include,
@@ -492,15 +274,12 @@ def generate(
         major=major,
         minor=minor,
         patch=patch,
-        regions=internal_regions,
-        appended=[_render_decl(n, f) for n, f in appended],
+        api_version=api_version,
+        members=[decl for _, decl, _, _ in members],
         assignments=assignments,
     )
     internal_out = Path(internal_out)
     internal_out.parent.mkdir(parents=True, exist_ok=True)
     internal_out.write_text(internal)
 
-    print(
-        f"Generated {output_path} and {internal_out} "
-        f"({len(member_list) + len(appended)} members, {len(appended)} appended)"
-    )
+    print(f"Generated {output_path} and {internal_out} ({len(members)} members)")

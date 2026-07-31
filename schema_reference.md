@@ -13,22 +13,22 @@ targets.
 
 ```yaml
 # metadata.yaml
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.5.0/src/capigen/schema/metadata.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.6.0/src/capigen/schema/metadata.schema.json
 ```
 
 ```yaml
 # a module file
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.5.0/src/capigen/schema/module.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.6.0/src/capigen/schema/module.schema.json
 ```
 
 Every schema change is at least a minor bump, so all patch tags in a `MAJOR.MINOR` line
-carry the same schema. Pin to the first tag of the line: `v0.5.0` for schema `0.5`.
+carry the same schema. Pin to the first tag of the line: `v0.6.0` for schema `0.6`.
 
 `raw.githubusercontent.com` serves the same files if you would rather not depend on
 jsDelivr. Keep the path, change the host:
 
 ```
-https://raw.githubusercontent.com/duckdb/capigen/v0.5.0/src/capigen/schema/module.schema.json
+https://raw.githubusercontent.com/duckdb/capigen/v0.6.0/src/capigen/schema/module.schema.json
 ```
 
 ## Two conventions first
@@ -60,13 +60,37 @@ entry is the construct's current state. Each entry is `[state, version, date]`:
 
 ```yaml
 lifecycle:
-  - ["frozen", "v1.5.4", "2026-05-18"]
+  - ["stable", "v1.5.4", "2026-05-18"]
 ```
 
-The current state's visibility decides how the C adapter emits the construct: plainly,
-behind a guard, or not at all. Cross-module validation checks each state name against
-the declared states, and rejects a construct that references anything some guard
-configuration compiles out while the construct itself remains present.
+Reading top to bottom, versions never increase and the states move strictly backwards
+through their declared `order`, so a construct cannot revisit a state or regress. Two
+transitions may share a version (stabilized and deprecated in one release).
+
+**Only functions are gated.** A type is inert and unreachable without a function, so
+compiling it out buys a consumer nothing while creating references that dangle at some
+target versions. Types still carry a `lifecycle` — it documents them and drives the
+`history:` comment — but they are always emitted, unless their state is `never`, which
+says they are not part of the API at all.
+
+A function is emitted when the consumer's target version is new enough *and* the
+current state's switch allows it, so the whole stack folds into one condition. Given
+the stack above, a function unstable in v1.5.0 and stable in v1.5.6 emits under:
+
+```c
+#if LIB_API_VERSION_AT_LEAST(1, 5, 0) && (LIB_API_VERSION_AT_LEAST(1, 5, 6) || LIB_API_ALLOW_UNSTABLE)
+```
+
+That is "as of the version I target": targeting v1.5.6 or later gets it unconditionally,
+targeting v1.5.0 gets it only by opting into the unstable surface, and targeting
+anything older does not see it at all. Deprecation works the same way round, so a
+construct deprecated in v1.5.6 stays visible to a consumer targeting v1.5.4.
+
+Cross-module validation checks each state name against the declared states, and rejects
+a construct that references something emitted nowhere — a `never` type. It also rejects
+a function stamped older than a type in its own signature: the signature described
+cannot be the one that version shipped, so a consumer targeting a version in between
+would get a declaration the library of that version never exported.
 
 ---
 
@@ -77,7 +101,7 @@ Global settings shared by all modules.
 | Field | Required | Description |
 |---|---|---|
 | `schema_version` | yes | Schema version this spec targets. `MAJOR.MINOR`. A legacy `MAJOR.MINOR.PATCH` is accepted and the patch is ignored. |
-| `versions` | yes | The described API's known versions (`vX.Y.Z`). Validates `added` / `deprecated` on functions. The spec describes the API as of the latest of these. |
+| `versions` | yes | The described API's known versions (`vX.Y.Z`). Every `lifecycle` entry must name one. The spec describes the API as of the latest; the oldest is the oldest a consumer may target. |
 | `suffixes` | yes | ABI naming suffix per construct type. See below. |
 | `primitives` | yes | Primitive type vocabulary. See below. |
 | `prefix` | no | Prepended to every generated identifier. E.g. `duckdb_v2_` gives `duckdb_v2_open`. Uppercased for constants and enum values. |
@@ -95,32 +119,41 @@ declared states. Gated visibilities carry their macro token:
 
 ```yaml
 lifecycle_states:
-  unstable:   {visibility: opt_in,  guard: LIB_API_UNSTABLE}
-  stable:     {visibility: always}
-  frozen:     {visibility: always}
-  deprecated: {visibility: opt_out, guard: LIB_API_NO_DEPRECATED}
-  removed:    {visibility: never}
+  unstable:   {visibility: opt_in,  guard: LIB_API_UNSTABLE,       order: 0}
+  stable:     {visibility: always,                                 order: 1}
+  deprecated: {visibility: opt_out, guard: LIB_API_NO_DEPRECATED,  order: 2}
+  removed:    {visibility: never,                                  order: 3}
 ```
 
-| Visibility | Rendering | Guard |
+| Visibility | Rendering (functions) | Guard |
 |---|---|---|
-| `always` | Always emitted. | forbidden |
-| `opt_in` | Behind `#ifdef guard`. The consumer defines the macro to get it. | required |
-| `opt_out` | Behind `#ifndef guard`. The consumer defines the macro to drop it. | required |
+| `always` | Emitted whenever the target version is new enough. | forbidden |
+| `opt_in` | Also requires `{PREFIX}API_ALLOW_{STATE}`, which defaults to 0. | required |
+| `opt_out` | Also requires `{PREFIX}API_ALLOW_{STATE}`, which defaults to 1. | required |
 | `never` | Not emitted at all. | forbidden |
+
+Types read only the last row: `never` omits them, every other state emits them plainly.
+
+Each gated state gets a positive-polarity switch named `{PREFIX}API_ALLOW_{STATE}`, so
+opt-in and opt-out read the same way round: set it to 1 to compile that surface, 0 to
+omit it. `guard` is the older negative-polarity macro; it only seeds the switch's
+default, so a consumer that still defines `LIB_API_NO_DEPRECATED` keeps working.
+
+`order` places a state in the lifecycle progression, low to high. Declare it on every
+state or none; when declared, validation enforces that a construct only moves forward.
 
 There is no built-in vocabulary. A spec declares every state it uses; without a
 `lifecycle_states` block no states exist, and any `lifecycle` entry fails validation.
 The block above is a conventional starting point, not a default.
 
 The guard token lives on the state, so every adapter reads the same declaration. The
-extension_header adapter gates appended members with the `unstable` state's guard and
-requires that state to be `opt_in`. The bridge adapter defines every `opt_in` guard at
-the top of the stub file, because the engine implements the full surface.
-
-A function's legacy `deprecated` field gates with the `deprecated` state's guard, and
-only when that state is declared with visibility `opt_out`. Without one, the field is
-metadata only.
+extension_header adapter groups struct members into contiguous bands by the version
+they were *stabilized* in, one gate per band, so targeting an older version truncates
+the struct to exactly the slots that version shipped. Members that are not yet stable
+form a tail gated on the opt-in switch; because the tail sits after every band, its
+offsets are only valid when all bands are compiled in, so reaching it requires
+targeting the newest version. The bridge adapter sets every switch at the top of the
+stub file, because the engine implements the full surface.
 
 ### primitives (list items)
 
@@ -153,7 +186,7 @@ never scanned for modules. For editor autocomplete, point the modeline at the
 adapter's schema:
 
 ```yaml
-# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.5.0/src/capigen/adapters/c/options.schema.json
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/duckdb/capigen@v0.6.0/src/capigen/adapters/c/options.schema.json
 ```
 
 What a construct *is* lives in the spec proper (types, signatures, lifecycle states);
@@ -406,7 +439,8 @@ functions:
         kind: OUT
         description: The opened database.
     return_type: API_CALL
-    added: "1.2.0"
+    lifecycle:
+      - ["stable", "v1.2.0", "2024-04-17"]
 ```
 
 | Field | Required | Default | Description |
@@ -418,9 +452,23 @@ functions:
 | `return_pointer` | no | `0` | Pointer indirection on the return type. |
 | `return_const` | no | `false` | Const-qualify the return type. |
 | `return_description` | no | none | Description of the return value. |
-| `added` | no | none | API version when introduced (`vX.Y.Z`, from `versions`). |
-| `deprecated` | no | none | API version when deprecated (`vX.Y.Z`, from `versions`). |
+| `offset` | no | none | Frozen position in the extension_header function-pointer struct. See below. |
+| `renamed_from` | no | none | `{name, version}`: this construct's former spelling and the version it changed in. |
 | `static_inline` | no | `false` | Emit as a `static inline` in the header. |
+
+`renamed_from` is accepted on functions and on every type-bearing construct. The
+C adapter emits the old spelling as an alias — a `typedef` for a type, a `#define`
+for a function — gated below the version named, so the former name resolves
+exactly while a consumer targets a version that still had it. Validation rejects a
+former name that is also a live construct, one claimed by two constructs, or a
+version the spec does not declare.
+
+`offset` exists only to reproduce an ABI laid down before there was an ordering rule.
+The extension_header adapter lays out its struct by putting every function carrying an
+`offset` first, in that order, then everything else oldest-first with ties broken by
+name — so a new function always lands at the end and the layout is reproducible from
+the spec alone. An offset identifies one slot, so two functions cannot share one. It
+affects no other adapter.
 
 Plus `description` and `lifecycle`.
 
