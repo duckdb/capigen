@@ -1072,10 +1072,14 @@ class TestCompile:
         output = tmp_path / "duckdb_v2.h"
         generate(modules, metadata, output)
 
+        # Reference the symbol without calling it. An undeclared identifier is a
+        # hard error in every C compiler, whereas an implicit function *call* is
+        # only a warning in some (gcc), which would make this test depend on which
+        # compiler happens to be installed.
         test_c = tmp_path / "test.c"
         test_c.write_text(
             '#include "duckdb_v2.h"\n'
-            "int main(void) { return (int)duckdb_v2_scratch_create(0, 0); }\n"
+            "void *probe(void) { return (void *)&duckdb_v2_scratch_create; }\n"
         )
 
         without = subprocess.run(
