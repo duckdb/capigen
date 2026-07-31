@@ -29,8 +29,8 @@ then as any importable module exposing `generate()`. The CLI is a thin runner
 writing its own entry point.
 
 ```bash
-uv run capigen --version           # package version (e.g. 0.6.0)
-uv run capigen --schema-version    # supported schema version (e.g. 0.6)
+uv run capigen --version           # package version (e.g. 0.7.0)
+uv run capigen --schema-version    # supported schema version (e.g. 0.7)
 ```
 
 ## Project layout
@@ -106,7 +106,7 @@ The package version and the schema version are coupled: **`MAJOR.MINOR` of the p
 
 ```yaml
 # metadata.yaml
-schema_version: "0.6"
+schema_version: "0.7"
 ```
 
 The loader accepts a spec when the majors match and the spec minor is at most the tool minor (an older spec is valid under a newer additive schema), and refuses otherwise with an actionable message. `capigen.SCHEMA_VERSION` is derived from the installed package version, so the two cannot drift.
@@ -117,7 +117,7 @@ The loader accepts a spec when the majors match and the spec minor is at most th
 | Breaking schema change (field removed/renamed, validation tightened) | major |
 | Tool-only fix (rendering, bug fix), no schema delta | patch |
 
-A consumer repo pins a compatible capigen (e.g. `capigen~=0.6.0`) and, because generated headers are typically committed and checked in CI, locks an exact version for reproducible output. See [RELEASING.md](RELEASING.md) for the full policy.
+A consumer repo pins a compatible capigen (e.g. `capigen~=0.7.0`) and, because generated headers are typically committed and checked in CI, locks an exact version for reproducible output. See [RELEASING.md](RELEASING.md) for the full policy.
 
 ## Writing an adapter
 

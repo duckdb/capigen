@@ -36,11 +36,9 @@ class TestRoundTrip:
         assert "duckdb_v2_database_ptr" in content
         assert "DUCKDB_V2_TYPE" in content
         assert "DUCKDB_V2_API_ERROR" in content
-        # The unstable constructs in the testspec render behind the opt-in guard.
-        assert (
-            "#if DUCKDB_V2_API_VERSION_AT_LEAST(1, 0, 0) && "
-            "DUCKDB_V2_API_ALLOW_UNSTABLE" in content
-        )
+        # A never-promised construct gates on the switch alone: reaching it
+        # requires the newest target, so no version term can add anything.
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" in content
         # The removed function is not emitted at all.
         assert "duckdb_v2_legacy_open(" not in content
         # Every enum ends with the width-pinning sentinel.
@@ -493,6 +491,10 @@ class TestUnstableGating:
         generate([module], metadata, output, options=options)
         return output.read_text()
 
+    def _body(self, content):
+        """Everything after the preamble, which now mentions the switches itself."""
+        return content.split("General type definitions", 1)[1]
+
     def test_unstable_handle_is_not_guarded(self, tmp_path):
         """Only functions gate; the type keeps its history comment and no #if."""
         module = self._module(handles={"scratch": {"lifecycle": UNSTABLE}})
@@ -504,12 +506,12 @@ class TestUnstableGating:
             " */\n"
             "typedef void* duckdb_v2_scratch_ptr;" in content
         )
-        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in self._body(content)
 
     def test_stable_handle_is_not_guarded(self, tmp_path):
         module = self._module(handles={"ctx": {}})
         content = self._generate(module, self._metadata(), tmp_path)
-        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in self._body(content)
 
     def test_guard_wraps_the_doc_comment(self, tmp_path):
         module = self._module(
@@ -551,7 +553,7 @@ class TestUnstableGating:
             " */\n"
             "typedef uint32_t duckdb_v2_count_t;" in content
         )
-        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in self._body(content)
 
     def test_unstable_enum_is_not_guarded(self, tmp_path):
         module = self._module(
@@ -562,7 +564,7 @@ class TestUnstableGating:
             "/*!\n * history:\n * - unstable: v1.0.0\n */\ntypedef enum DUCKDB_V2_MODE {"
             in content
         )
-        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in self._body(content)
 
     def test_unstable_callback_is_not_guarded(self, tmp_path):
         module = self._module(
@@ -584,7 +586,7 @@ class TestUnstableGating:
             " */\n"
             "typedef void (*duckdb_v2_notify_cb)(void);" in content
         )
-        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in self._body(content)
 
     def test_unstable_struct_guards_neither_declaration_nor_body(self, tmp_path):
         module = self._module(
@@ -603,7 +605,7 @@ class TestUnstableGating:
             "/*!\n * history:\n * - unstable: v1.0.0\n */\nstruct duckdb_v2_point {"
             in content
         )
-        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in self._body(content)
 
     def test_unstable_function_is_guarded(self, tmp_path):
         module = self._module(
@@ -617,9 +619,9 @@ class TestUnstableGating:
                 }
             }
         )
-        content = self._generate(module, self._metadata(), tmp_path)
-        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" in content
-        declaration = content.split("#if DUCKDB_V2_API_ALLOW_UNSTABLE", 1)[1]
+        body = self._body(self._generate(module, self._metadata(), tmp_path))
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" in body
+        declaration = body.split("#if DUCKDB_V2_API_ALLOW_UNSTABLE", 1)[1]
         declaration = declaration.split("#endif", 1)[0]
         assert "duckdb_v2_poke(void);" in declaration
 
@@ -682,7 +684,7 @@ class TestUnstableGating:
             " */\n"
             "typedef void* duckdb_v2_legacy_ptr;" in content
         )
-        assert "DUCKDB_V2_API_ALLOW_DEPRECATED\n" not in content
+        assert "DUCKDB_V2_API_ALLOW_DEPRECATED\n" not in self._body(content)
 
     def _deprecated_module(self):
         func = {
@@ -779,7 +781,7 @@ class TestUnstableGating:
             "typedef uint32_t idx_t;\n"
             "#endif" in content
         )
-        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in self._body(content)
 
     def test_unstable_tagged_struct_handle_is_not_guarded(self, tmp_path):
         module = self._module(handles={"scratch": {"lifecycle": UNSTABLE}})
@@ -793,7 +795,7 @@ class TestUnstableGating:
             "/*!\n * history:\n * - unstable: v1.0.0\n */\ntypedef struct _duckdb_v2_scratch {"
             in content
         )
-        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in content
+        assert "#if DUCKDB_V2_API_ALLOW_UNSTABLE" not in self._body(content)
 
 
 class TestRenames:
